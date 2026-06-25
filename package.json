@@ -1,0 +1,13 @@
+{
+  "name": "zotero-math-patch",
+  "version": "0.1.7",
+  "private": true,
+  "description": "Manual Markdown math renderer for Zotero notes.",
+  "scripts": {
+    "build": "mkdir -p builds && zip -r builds/zotero-math-patch.xpi manifest.json bootstrap.js chrome README.md -x '*.DS_Store'",
+    "test": "node test/converter.test.js"
+  },
+  "devDependencies": {
+    "linkedom": "^0.18.12"
+  }
+}
