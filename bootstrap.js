@@ -1,10 +1,67 @@
 var chromeHandle;
 var plugin;
 
+if (typeof Zotero === "undefined") {
+  var Zotero;
+}
+
+if (typeof Services === "undefined") {
+  var { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
+}
+
 function install() {}
 
-async function startup({ id, rootURI }) {
+async function waitForZotero() {
+  if (typeof Zotero !== "undefined" && Zotero) {
+    await Zotero.initializationPromise;
+    return;
+  }
+
+  var windows = Services.wm.getEnumerator("navigator:browser");
+  while (windows.hasMoreElements()) {
+    var win = windows.getNext();
+    if (win.Zotero) {
+      Zotero = win.Zotero;
+      await Zotero.initializationPromise;
+      return;
+    }
+  }
+
+  await new Promise((resolve) => {
+    var listener = {
+      onOpenWindow(xulWindow) {
+        var domWindow = xulWindow
+          .QueryInterface(Components.interfaces.nsIInterfaceRequestor)
+          .getInterface(Components.interfaces.nsIDOMWindowInternal || Components.interfaces.nsIDOMWindow);
+
+        domWindow.addEventListener(
+          "load",
+          function onLoad() {
+            domWindow.removeEventListener("load", onLoad, false);
+            if (domWindow.Zotero) {
+              Services.wm.removeListener(listener);
+              Zotero = domWindow.Zotero;
+              resolve();
+            }
+          },
+          false,
+        );
+      },
+    };
+    Services.wm.addListener(listener);
+  });
+
   await Zotero.initializationPromise;
+}
+
+async function startup(data) {
+  await waitForZotero();
+
+  var id = data.id;
+  var rootURI = data.rootURI || data.resourceURI?.spec;
+  if (!rootURI) {
+    throw new Error("Zotero Math Patch: missing add-on rootURI.");
+  }
 
   var aomStartup = Components.classes[
     "@mozilla.org/addons/addon-manager-startup;1"

@@ -23,6 +23,7 @@ Zotero 主窗口菜单入口：
 - 处理当前打开的笔记、当前笔记标签页，或 Zotero 文献库中选中的单个笔记条目。
 - 将行内 Markdown 公式转换为 Zotero 行内公式节点。
 - 将块级 Markdown 公式转换为 Zotero 块级公式节点。
+- 兼容部分论文/AI 输出常见的粘贴格式：用独立 `[` / `]` 包裹的块级公式，以及 `(d_i)`、`(\Delta TTCP)` 这类括号内短公式符号。
 - 支持同一篇笔记中多个公式分别转换。
 - 跳过已有 Zotero 公式节点、代码块、预格式化块、脚本和样式内容。
 - 尽量保持普通笔记结构不变，包括中文文本、标题、列表、引用和普通段落。
@@ -65,6 +66,24 @@ $$
 ```markdown
 这是 $R_{\text{name}}$ 的定义
 ```
+
+方括号包裹的块级公式，适合从聊天工具或论文笔记里直接粘贴过来的内容：
+
+```markdown
+[
+TTCP_i=\frac{d_i}{v_i}
+]
+```
+
+Zotero 或 Better Notes 有时会把上面三行保存成三个段落。插件会把独立的 `[`、公式正文和独立的 `]` 合并识别为一个块级公式。
+
+括号内短公式符号：
+
+```markdown
+其中 (d_i) 是车 (i) 到冲突点的距离，比较 (\Delta TTCP)。
+```
+
+为了减少误转换，普通说明性括号不会被当成公式，例如 `(Better Notes)`、`(2026)`。单个字母括号如 `(i)` 只有在同一段里已经出现更明确的括号公式时才会一起转换。
 
 同一篇笔记中可以包含多个公式，插件会分别转换。语义化代码块会被跳过：
 
@@ -126,6 +145,12 @@ $$
 R_{\text{multi}} = 2
 $$
 
+[
+TTCP_i=\frac{d_i}{v_i}
+]
+
+其中 (d_i) 是车 (i) 到冲突点的距离，比较 (\Delta TTCP)。
+
 ```latex
 $$R_{\text{code}} = 3$$
 ```
@@ -133,7 +158,8 @@ $$R_{\text{code}} = 3$$
 
 预期结果：
 
-- 行内公式、两种同一行块级公式、多行块级公式都会转换成可渲染公式。
+- 行内公式、两种同一行块级公式、多行块级公式、方括号块级公式都会转换成可渲染公式。
+- `(d_i)`、`(i)` 和 `(\Delta TTCP)` 会转换成行内公式。
 - 如果最后一段已经被 Zotero 保存为真正的代码块，则其中的 `$$...$$` 不会被转换。
 
 ## 故障排查
@@ -141,7 +167,8 @@ $$R_{\text{code}} = 3$$
 - 菜单中没有 `Render Markdown Math`：确认插件已启用，并在 Zotero 插件页面按提示重启 Zotero。
 - 安装 XPI 时提示不兼容：重新运行 `npm run build`，确认安装的是 `builds/zotero-math-patch.xpi`，并确认 Zotero 版本为 7 或更新版本。
 - 提示 `No current Zotero note found.`：先打开一个笔记标签页，或在 Zotero 文献库中选中一个笔记条目。
-- 提示 `No Markdown math delimiters found.`：当前笔记中没有插件支持的 `$...$` 或 `$$...$$` 公式，或这些内容已经转换过。
+- 提示 `No Markdown math delimiters found.`：当前笔记中没有插件支持的 `$...$`、`$$...$$`、方括号块级公式或括号内短公式，或这些内容已经转换过。
+- 插件页面显示已启用但菜单中没有 `Render Markdown Math`：重新运行 `npm run build` 并安装新生成的 XPI。Windows 构建会确保 XPI 内部路径使用 `chrome/content/...`，避免 Zotero 无法加载脚本。
 - 转换后没有立即刷新：关闭并重新打开该笔记；如果仍未显示，检查 Zotero 插件页面和错误控制台。
 
 ## 开发
@@ -165,14 +192,26 @@ npm run build
 unzip -t builds/zotero-math-patch.xpi
 ```
 
+在 Windows 上也可以用 PowerShell 检查 XPI 内部路径是否使用正斜杠：
+
+```powershell
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zip = [IO.Compression.ZipFile]::OpenRead("builds/zotero-math-patch.xpi")
+$zip.Entries | Select-Object FullName
+$zip.Dispose()
+```
+
 ## 项目结构
 
 ```text
 manifest.json                 Zotero 插件 manifest
+install.rdf                   Zotero 6/旧式兼容元数据
+chrome.manifest               旧式 chrome content 映射
 bootstrap.js                  Zotero bootstrap 入口
 chrome/content/math-renderer.js
                               菜单注册、当前笔记查找、保存和刷新
 chrome/content/converter.js   Markdown 公式到 Zotero math HTML 的转换逻辑
+scripts/build-xpi.js          跨平台 XPI 构建脚本
 test/converter.test.js        Node 环境下的转换器测试
 docs/assets/                  README 截图和示意图
 ```

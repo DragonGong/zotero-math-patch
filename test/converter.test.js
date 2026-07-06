@@ -128,4 +128,46 @@ function convert(html) {
   assert.match(result.html, /<blockquote>引用<\/blockquote>/);
 }
 
+{
+  const result = renderMarkdownMathInHTML(
+    '<div class="zotero-note znv1"><p>[</p><p>TTC=\\frac{relative distance}{closing speed}</p><p>]</p></div>',
+  );
+  assert.equal(result.stats.block, 1);
+  assert.equal(
+    result.html,
+    '<div class="zotero-note znv1"><pre class="math">$$TTC=\\frac{relative distance}{closing speed}$$</pre></div>',
+  );
+}
+
+{
+  const result = renderMarkdownMathInHTML(
+    '<div class="zotero-note znv1"><p><span>[<br>TTCP_i=\\frac{d_i}{v_i}<br>]</span></p></div>',
+  );
+  assert.equal(result.stats.block, 1);
+  assert.equal(
+    result.html,
+    '<div class="zotero-note znv1"><pre class="math">$$TTCP_i=\\frac{d_i}{v_i}$$</pre></div>',
+  );
+}
+
+{
+  const result = renderMarkdownMathInHTML(
+    '<div class="zotero-note znv1"><p>where (d_i) is the distance for car (i), compare (TTCP_1 &lt; TTCP_2), but keep (plain text).</p></div>',
+  );
+  assert.equal(result.stats.inline, 3);
+  assert.match(result.html, /where <span class="math">\$d_i\$<\/span> is the distance for car <span class="math">\$i\$<\/span>/);
+  assert.match(result.html, /compare <span class="math">\$TTCP_1 &lt; TTCP_2\$<\/span>/);
+  assert.match(result.html, /\(plain text\)/);
+}
+
+{
+  const result = renderMarkdownMathInHTML(
+    '<div class="zotero-note znv1"><p>Keep ordinary notes (Better Notes) and dates (2026).</p><p>[not a formula]</p></div>',
+  );
+  assert.equal(result.stats.block, 0);
+  assert.equal(result.stats.inline, 0);
+  assert.match(result.html, /\(Better Notes\)/);
+  assert.match(result.html, /\[not a formula\]/);
+}
+
 console.log("converter tests passed");

@@ -7,15 +7,9 @@
 
   const ZoteroMathPatch = {
     async startup() {
-      for (const win of Zotero.getMainWindows()) {
-        this.onWindowLoad(win);
-      }
-
-      const noteWindows = Services.wm.getEnumerator(NOTE_WINDOW_TYPE);
-      while (noteWindows.hasMoreElements()) {
-        this.onWindowLoad(noteWindows.getNext());
-      }
-
+      this.registerOpenWindows();
+      setTimeout(() => this.registerOpenWindows(), 1000);
+      setTimeout(() => this.registerOpenWindows(), 3000);
       Services.wm.addListener(windowListener);
     },
 
@@ -51,6 +45,28 @@
       data.separator?.remove();
       data.item?.remove();
       registeredWindows.delete(win);
+    },
+
+    registerOpenWindows() {
+      const windows = new Set();
+      const mainWindows = Zotero.getMainWindows?.() || [];
+      for (const win of mainWindows) {
+        windows.add(win);
+      }
+
+      const mainWindow = Zotero.getMainWindow?.();
+      if (mainWindow) {
+        windows.add(mainWindow);
+      }
+
+      const noteWindows = Services.wm.getEnumerator(NOTE_WINDOW_TYPE);
+      while (noteWindows.hasMoreElements()) {
+        windows.add(noteWindows.getNext());
+      }
+
+      for (const win of windows) {
+        this.onWindowLoad(win);
+      }
     },
 
     async renderCurrentNote(win) {

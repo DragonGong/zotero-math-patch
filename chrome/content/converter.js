@@ -36,6 +36,7 @@
   function renderMarkdownMathInHTML(html) {
     const parser = new DOMParser();
     const doc = parser.parseFromString(html || "", "text/html");
+    doc.body.normalize();
     const stats = {
       block: 0,
       inline: 0,
@@ -46,6 +47,7 @@
     stats.block += convertSingleElementBlockMath(doc);
     stats.inline += convertInlineDoubleDollarMath(doc);
     stats.inline += convertInlineMath(doc);
+    stats.inline += convertParentheticalMath(doc);
     stats.changed = stats.block > 0 || stats.inline > 0;
 
     return {
@@ -66,13 +68,14 @@
       let children = Array.from(parent.children);
       for (let i = 0; i < children.length; i++) {
         const start = children[i];
-        if (!isStandaloneBlockDelimiter(start)) {
+        const delimiter = getStandaloneBlockDelimiter(start);
+        if (!delimiter) {
           continue;
         }
 
         let endIndex = -1;
         for (let j = i + 1; j < children.length; j++) {
-          if (isStandaloneBlockDelimiter(children[j])) {
+          if (isStandaloneClosingDelimiter(children[j], delimiter)) {
             endIndex = j;
             break;
           }
@@ -89,6 +92,10 @@
           .trim();
 
         if (!formulaParts) {
+          continue;
+        }
+
+        if (!isBlockFormulaForDelimiter(formulaParts, delimiter)) {
           continue;
         }
 
@@ -118,13 +125,17 @@
       }
 
       const text = getBlockText(node).trim();
-      const match = text.match(/^\$\$([\s\S]+)\$\$$/);
+      const match = text.match(/^\$\$([\s\S]+)\$\$$/) || text.match(/^\[([\s\S]+)\]$/);
       if (!match) {
         continue;
       }
 
       const formula = match[1].trim();
       if (!formula) {
+        continue;
+      }
+
+      if (text[0] === "[" && !isLikelyMathFormula(formula)) {
         continue;
       }
 
@@ -177,6 +188,128 @@
     }
 
     return converted;
+  }
+
+  function convertParentheticalMath(doc) {
+    let converted = 0;
+    const walker = doc.createTreeWalker(
+      doc.body,
+      NodeFilter.SHOW_TEXT,
+    );
+
+    const textNodes = [];
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (node.nodeValue && node.nodeValue.indexOf("(") !== -1 && !isSkipped(node.parentElement)) {
+        textNodes.push(node);
+      }
+    }
+
+    for (const textNode of textNodes) {
+      converted += replaceParentheticalMathInTextNode(doc, textNode);
+    }
+
+    return converted;
+  }
+
+  function replaceParentheticalMathInTextNode(doc, textNode) {
+    const text = textNode.nodeValue;
+    const matches = findParentheticalMathMatches(text);
+    if (!matches.length) {
+      return 0;
+    }
+
+    const fragment = doc.createDocumentFragment();
+    let offset = 0;
+
+    for (const match of matches) {
+      if (match.start > offset) {
+        fragment.appendChild(doc.createTextNode(text.slice(offset, match.start)));
+      }
+
+      const span = doc.createElement("span");
+      span.className = MATH_CLASS;
+      span.textContent = "$" + match.formula + "$";
+      fragment.appendChild(span);
+      offset = match.end;
+    }
+
+    if (offset < text.length) {
+      fragment.appendChild(doc.createTextNode(text.slice(offset)));
+    }
+
+    textNode.replaceWith(fragment);
+    return matches.length;
+  }
+
+  function findParentheticalMathMatches(text) {
+    const candidates = [];
+    let i = 0;
+
+    while (i < text.length) {
+      if (text[i] !== "(" || isEscaped(text, i)) {
+        i++;
+        continue;
+      }
+
+      let end = i + 1;
+      while (end < text.length) {
+        if (text[end] === "\n" || text[end] === "\r") {
+          end = -1;
+          break;
+        }
+        if (text[end] === ")" && !isEscaped(text, end)) {
+          break;
+        }
+        end++;
+      }
+
+      if (end <= i || end >= text.length) {
+        i++;
+        continue;
+      }
+
+      const formula = text.slice(i + 1, end);
+      const kind = getParentheticalFormulaKind(text, i, end, formula);
+      if (kind) {
+        candidates.push({
+          start: i,
+          end: end + 1,
+          formula,
+          kind,
+        });
+      }
+
+      i = end + 1;
+    }
+
+    const hasStrongFormula = candidates.some((candidate) => candidate.kind === "strong");
+    return candidates
+      .filter((candidate) => candidate.kind === "strong" || hasStrongFormula)
+      .map((candidate) => ({
+        start: candidate.start,
+        end: candidate.end,
+        formula: candidate.formula,
+      }));
+  }
+
+  function getParentheticalFormulaKind(text, start, end, formula) {
+    if (!isInlineFormula(formula)) {
+      return null;
+    }
+    if (/[()]/.test(formula)) {
+      return null;
+    }
+    if (!hasParentheticalBoundary(text[start - 1]) || !hasParentheticalBoundary(text[end + 1])) {
+      return null;
+    }
+    if (isLikelyMathFormula(formula)) {
+      return "strong";
+    }
+    if (/^[A-Za-z]$/.test(formula)) {
+      return "weak";
+    }
+    return null;
   }
 
   function replaceDoubleDollarMathInTextNode(doc, textNode) {
@@ -340,11 +473,37 @@
     return true;
   }
 
-  function isStandaloneBlockDelimiter(node) {
+  function getStandaloneBlockDelimiter(node) {
+    if (!isBlockElement(node) || isSkipped(node)) {
+      return null;
+    }
+    const text = getBlockText(node).trim();
+    if (text === "$$") {
+      return {
+        open: "$$",
+        close: "$$",
+        requiresMathSyntax: false,
+      };
+    }
+    if (text === "[") {
+      return {
+        open: "[",
+        close: "]",
+        requiresMathSyntax: true,
+      };
+    }
+    return null;
+  }
+
+  function isStandaloneClosingDelimiter(node, delimiter) {
     if (!isBlockElement(node) || isSkipped(node)) {
       return false;
     }
-    return getBlockText(node).trim() === "$$";
+    return getBlockText(node).trim() === delimiter.close;
+  }
+
+  function isBlockFormulaForDelimiter(formula, delimiter) {
+    return !delimiter.requiresMathSyntax || isLikelyMathFormula(formula);
   }
 
   function isBlockElement(node) {
@@ -408,10 +567,23 @@
     return slashCount % 2 === 1;
   }
 
+  function isLikelyMathFormula(formula) {
+    return /\\[A-Za-z]+/.test(formula)
+      || /[_^]/.test(formula)
+      || /[=<>*/|]/.test(formula)
+      || /[{}]/.test(formula)
+      || /[A-Za-z]\d|\d[A-Za-z]/.test(formula);
+  }
+
+  function hasParentheticalBoundary(char) {
+    return !char || !/[A-Za-z0-9_$\\]/.test(char);
+  }
+
   const api = {
     renderMarkdownMathInHTML,
     findInlineMathMatches,
     findDoubleDollarMathMatches,
+    findParentheticalMathMatches,
   };
 
   if (typeof module !== "undefined" && module.exports) {
