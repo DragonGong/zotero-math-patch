@@ -8,7 +8,9 @@ const root = path.resolve(__dirname, "..");
 const buildsDir = path.join(root, "builds");
 const zipPath = path.join(buildsDir, "zotero-math-patch.zip");
 const xpiPath = path.join(buildsDir, "zotero-math-patch.xpi");
-const entries = ["manifest.json", "install.rdf", "chrome.manifest", "bootstrap.js", "chrome", "README.md"];
+const entries = ["manifest.json", "install.rdf", "chrome.manifest", "bootstrap.js", "prefs.js", "chrome", "README.md", "CHANGELOG.md"];
+
+validateManifest();
 
 fs.rmSync(zipPath, { force: true });
 fs.rmSync(xpiPath, { force: true });
@@ -25,6 +27,19 @@ else {
 
 fs.renameSync(zipPath, xpiPath);
 console.log("Built " + path.relative(root, xpiPath));
+
+function validateManifest() {
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
+  const zotero = manifest.applications?.zotero;
+
+  if (!zotero?.id || !zotero.update_url || !zotero.strict_min_version || !zotero.strict_max_version) {
+    throw new Error("manifest.json is missing required applications.zotero metadata");
+  }
+
+  if (!/^https:\/\//.test(zotero.update_url)) {
+    throw new Error("applications.zotero.update_url must use HTTPS");
+  }
+}
 
 function collectFiles(source, zipName) {
   const stats = fs.statSync(source);

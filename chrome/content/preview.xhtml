@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<?xml-stylesheet href="chrome://global/skin/"?>
+<?xml-stylesheet href="chrome://zotero/skin/zotero.css"?>
+<?xml-stylesheet href="chrome://zotero/skin/overlay.css"?>
+<?xml-stylesheet href="chrome://zotero-platform/content/overlay.css"?>
+<?xml-stylesheet href="chrome://zotero-platform/content/zotero.css"?>
+<?xml-stylesheet href="chrome://zotero-math-patch/content/preview.css"?>
+
+<window
+  id="zotero-math-patch-preview-window"
+  class="zotero-dialog"
+  xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  xmlns:html="http://www.w3.org/1999/xhtml"
+  title="Math Patch AI Preview"
+  width="760"
+  height="620"
+  style="display: flex;"
+  onload="ZoteroMathPatchPreview.init()"
+>
+  <script>
+    Services.scriptloader.loadSubScript("chrome://zotero/content/include.js", this);
+    Services.scriptloader.loadSubScript("chrome://zotero/content/customElements.js", this);
+    Services.scriptloader.loadSubScript("chrome://zotero-math-patch/content/preview.js", this);
+  </script>
+
+  <vbox id="zotero-math-patch-preview-content" flex="1">
+    <html:h1 id="zotero-math-patch-preview-title">Formula changes</html:h1>
+    <html:p id="zotero-math-patch-preview-summary"></html:p>
+    <html:div id="zotero-math-patch-preview-list" role="list"></html:div>
+    <hbox id="zotero-math-patch-preview-actions" pack="end">
+      <button id="zotero-math-patch-preview-cancel" label="Cancel"/>
+      <button id="zotero-math-patch-preview-apply" label="Apply" default="true"/>
+    </hbox>
+  </vbox>
+</window>

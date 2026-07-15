@@ -1,0 +1,123 @@
+<vbox
+  id="zotero-math-patch-preferences-root"
+  xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  xmlns:html="http://www.w3.org/1999/xhtml"
+  onload="window.ZoteroMathPatchPreferences.init()"
+>
+  <groupbox id="zotero-math-patch-provider-group" aria-labelledby="zotero-math-patch-provider-title">
+    <label><html:h2 id="zotero-math-patch-provider-title">Model service</html:h2></label>
+    <html:div class="zotero-math-patch-form-grid">
+      <html:label for="zotero-math-patch-provider-type">Interface type</html:label>
+      <menulist
+        id="zotero-math-patch-provider-type"
+        preference="extensions.zotero.mathPatch.providerType"
+        native="true"
+      >
+        <menupopup>
+          <menuitem label="OpenAI Compatible" value="openai-compatible"/>
+        </menupopup>
+      </menulist>
+
+      <html:label for="zotero-math-patch-base-url">Interface address</html:label>
+      <html:input
+        id="zotero-math-patch-base-url"
+        type="url"
+        placeholder="https://api.example.com/v1"
+        preference="extensions.zotero.mathPatch.baseURL"
+      />
+
+      <html:label for="zotero-math-patch-api-key">API Key</html:label>
+      <html:input
+        id="zotero-math-patch-api-key"
+        type="password"
+        autocomplete="off"
+        placeholder="Stored locally in Firefox credential storage"
+      />
+
+      <html:label for="zotero-math-patch-model">Model name</html:label>
+      <html:input
+        id="zotero-math-patch-model"
+        type="text"
+        placeholder="deepseek-v4-flash"
+        preference="extensions.zotero.mathPatch.model"
+      />
+
+      <html:label for="zotero-math-patch-timeout">Request timeout (ms)</html:label>
+      <html:input
+        id="zotero-math-patch-timeout"
+        type="number"
+        min="1000"
+        max="600000"
+        step="1000"
+        preference="extensions.zotero.mathPatch.timeoutMs"
+      />
+    </html:div>
+    <hbox align="center" class="zotero-math-patch-actions">
+      <button
+        id="zotero-math-patch-test-connection"
+        label="Test Connection"
+      />
+      <html:span id="zotero-math-patch-connection-status" role="status" aria-live="polite"></html:span>
+    </hbox>
+  </groupbox>
+
+  <groupbox id="zotero-math-patch-processing-group" aria-labelledby="zotero-math-patch-processing-title">
+    <label><html:h2 id="zotero-math-patch-processing-title">Processing</html:h2></label>
+    <checkbox
+      id="zotero-math-patch-show-preview"
+      label="Show a preview before modifying the note"
+      preference="extensions.zotero.mathPatch.showPreview"
+      native="true"
+    />
+    <html:div class="zotero-math-patch-form-grid">
+      <html:label for="zotero-math-patch-scope">Default processing range</html:label>
+      <menulist
+        id="zotero-math-patch-scope"
+        preference="extensions.zotero.mathPatch.processingScope"
+        native="true"
+      >
+        <menupopup>
+          <menuitem label="Current whole note" value="note"/>
+          <menuitem label="Current selection" value="selection"/>
+          <menuitem label="Selection first, otherwise whole note" value="selection-or-note"/>
+        </menupopup>
+      </menulist>
+
+      <html:label for="zotero-math-patch-max-request-chars">Maximum characters per request</html:label>
+      <html:input
+        id="zotero-math-patch-max-request-chars"
+        type="number"
+        min="1000"
+        max="200000"
+        step="1000"
+        preference="extensions.zotero.mathPatch.maxRequestChars"
+      />
+
+      <html:label for="zotero-math-patch-max-output-tokens">Maximum output tokens</html:label>
+      <html:input
+        id="zotero-math-patch-max-output-tokens"
+        type="number"
+        min="64"
+        max="32768"
+        step="64"
+        preference="extensions.zotero.mathPatch.maxOutputTokens"
+      />
+    </html:div>
+  </groupbox>
+
+  <groupbox id="zotero-math-patch-prompt-group" aria-labelledby="zotero-math-patch-prompt-title">
+    <label><html:h2 id="zotero-math-patch-prompt-title">System prompt</html:h2></label>
+    <html:textarea
+      id="zotero-math-patch-system-prompt"
+      rows="18"
+      spellcheck="false"
+      preference="extensions.zotero.mathPatch.systemPrompt"
+    ></html:textarea>
+    <hbox class="zotero-math-patch-actions">
+      <button
+        id="zotero-math-patch-reset-prompt"
+        label="Restore Default Prompt"
+      />
+    </hbox>
+  </groupbox>
+</vbox>

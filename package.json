@@ -1,11 +1,11 @@
 {
   "name": "zotero-math-patch",
-  "version": "0.1.9",
+  "version": "0.2.4",
   "private": true,
-  "description": "Manual Markdown math renderer for Zotero notes.",
+  "description": "Rule-based and AI-assisted math repair for Zotero notes.",
   "scripts": {
     "build": "node scripts/build-xpi.js",
-    "test": "node test/converter.test.js"
+    "test": "node test/run-tests.js"
   },
   "devDependencies": {
     "linkedom": "^0.18.12"

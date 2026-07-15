@@ -1,0 +1,67 @@
+#zotero-math-patch-preview-window {
+  min-width: 620px;
+  min-height: 480px;
+}
+
+#zotero-math-patch-preview-content {
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  padding: 18px;
+}
+
+#zotero-math-patch-preview-title {
+  margin: 0 0 6px;
+  font-size: 1.35rem;
+  letter-spacing: 0;
+}
+
+#zotero-math-patch-preview-summary {
+  margin: 0 0 12px;
+}
+
+#zotero-math-patch-preview-list {
+  box-sizing: border-box;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+  border-radius: 4px;
+}
+
+#zotero-math-patch-preview-actions {
+  margin-top: 14px;
+  gap: 8px;
+}
+
+#zotero-math-patch-preview-actions > button {
+  min-width: 88px;
+}
+
+.zotero-math-patch-preview-row {
+  padding: 12px 14px;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+}
+
+.zotero-math-patch-preview-row:last-child {
+  border-bottom: 0;
+}
+
+.zotero-math-patch-preview-kind {
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.zotero-math-patch-preview-label {
+  margin-top: 7px;
+  color: color-mix(in srgb, currentColor 70%, transparent);
+  font-size: 0.9rem;
+}
+
+.zotero-math-patch-preview-value {
+  margin: 3px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  line-height: 1.4;
+}

@@ -1,101 +1,77 @@
-# Zotero Markdown Math Patch
+# Zotero Math Patch
 
-一个用于 Zotero 7 笔记的轻量插件，提供手动菜单命令 **Render Markdown Math**，用于修复 Zotero / Better Notes 中粘贴 Markdown 公式后不能自动渲染的问题。
+Zotero Math Patch 是面向 Zotero 7+ 笔记的公式修复插件。它提供两个完全手动触发的命令：
 
-典型场景是：你把 `$$...$$` 或 `$...$` 形式的 Markdown 公式粘贴进 Zotero 笔记后，Zotero / Better Notes 仍然把它当普通文本显示。本插件会把这些 Markdown 公式分隔符转换成 Zotero 笔记编辑器能够识别和渲染的数学公式节点。
+**当前版本：v0.2.4 · [下载 XPI](https://github.com/DragonGong/zotero-math-patch/releases/latest/download/zotero-math-patch.xpi) · [更新记录](CHANGELOG.md)**
 
-当前版本只做手动转换：**不会监听粘贴事件，也不会在后台自动改写笔记**。每次粘贴新公式后，需要手动执行一次 `Render Markdown Math`。
+| 命令 | 处理方式 | 适合场景 |
+| --- | --- | --- |
+| `Render Markdown Math` | 只使用本地规则，不联网 | 已有 `$...$`、`$$...$$`、方括号公式等明确格式 |
+| `Process Math with AI` | 调用用户配置的 OpenAI Compatible 服务 | 公式分隔符丢失、LaTeX 被拆段、Unicode/富文本公式损坏等混乱内容 |
 
-## 截图
+两个命令都支持当前打开的笔记、笔记标签页、单独笔记窗口，以及文献库中选中的单个笔记条目。插件不会监听粘贴事件，不会后台上传笔记，也不会自动批量处理文献库。
 
-Zotero 主窗口菜单入口：
+## 工作方式
 
-![Render Markdown Math command in Zotero Tools menu](docs/assets/tools-menu.png)
-
-转换前后示意：
-
-![Markdown math before and after conversion](docs/assets/conversion-preview.svg)
-
-## 功能
-
-- 在 Zotero 主窗口 `工具` 菜单中添加 `Render Markdown Math`。
-- 在单独打开的 Zotero 笔记窗口 `编辑` 菜单中添加同名命令。
-- 处理当前打开的笔记、当前笔记标签页，或 Zotero 文献库中选中的单个笔记条目。
-- 将行内 Markdown 公式转换为 Zotero 行内公式节点。
-- 将块级 Markdown 公式转换为 Zotero 块级公式节点。
-- 兼容部分论文/AI 输出常见的粘贴格式：用独立 `[` / `]` 包裹的块级公式，以及 `(d_i)`、`(\Delta TTCP)` 这类括号内短公式符号。
-- 支持同一篇笔记中多个公式分别转换。
-- 跳过已有 Zotero 公式节点、代码块、预格式化块、脚本和样式内容。
-- 尽量保持普通笔记结构不变，包括中文文本、标题、列表、引用和普通段落。
-
-## 兼容性
-
-项目目标环境是 Zotero 7+，并优先兼容 Zotero / Better Notes 9.0.4 的笔记工作流。
-
-插件不依赖 Better Notes 私有 API。它读取并保存 Zotero note HTML，把公式写成 Zotero 能识别的结构：
+规则模式沿用原有转换器，输出 Zotero 可识别的节点：
 
 ```html
-<span class="math">$inline$</span>
-<pre class="math">$$block$$</pre>
+<span class="math">$d_i$</span>
+<pre class="math">$$TTCP_i = \frac{d_i}{v_i}$$</pre>
 ```
 
-## 支持的输入
+AI 模式不会把整篇 HTML 交给模型，也不会接受模型返回的整篇 HTML。插件先在本地解析笔记，只发送带稳定编号的普通文本块，例如：
 
-同一行块级公式：
-
-```markdown
-$$R_{\text{format}} = 1$$
-```
-
-同一行块级公式，分隔符内部允许空格：
-
-```markdown
-$$ R_{\text{name}} = \frac{|N_G \cap N_P|}{|N_G \cup N_P|} $$
-```
-
-多行块级公式：
-
-```markdown
-$$
-R_{\text{format}} = 1
-$$
-```
-
-行内公式：
-
-```markdown
-这是 $R_{\text{name}}$ 的定义
-```
-
-方括号包裹的块级公式，适合从聊天工具或论文笔记里直接粘贴过来的内容：
-
-```markdown
+```json
 [
-TTCP_i=\frac{d_i}{v_i}
+  { "id": "block-1", "tag": "p", "text": "其中 (d_i) 表示距离。" },
+  { "id": "block-2", "tag": "p", "text": "[" },
+  { "id": "block-3", "tag": "p", "text": "TTCP_i = d_i / v_i" },
+  { "id": "block-4", "tag": "p", "text": "]" }
 ]
 ```
 
-Zotero 或 Better Notes 有时会把上面三行保存成三个段落。插件会把独立的 `[`、公式正文和独立的 `]` 合并识别为一个块级公式。
+模型只能返回公式操作：
 
-括号内短公式符号：
-
-```markdown
-其中 (d_i) 是车 (i) 到冲突点的距离，比较 (\Delta TTCP)。
+```json
+{
+  "operations": [
+    {
+      "type": "inline",
+      "blockId": "block-1",
+      "source": "(d_i)",
+      "occurrence": 1,
+      "latex": "d_i"
+    },
+    {
+      "type": "block",
+      "blockIds": ["block-2", "block-3", "block-4"],
+      "source": "[\nTTCP_i = d_i / v_i\n]",
+      "latex": "TTCP_i = \\frac{d_i}{v_i}"
+    }
+  ]
+}
 ```
 
-为了减少误转换，普通说明性括号不会被当成公式，例如 `(Better Notes)`、`(2026)`。单个字母括号如 `(i)` 只有在同一段里已经出现更明确的括号公式时才会一起转换。
+所有操作会在本地检查 JSON 结构、块编号、原文、出现次数、重叠范围、LaTeX 安全性和普通文字保护。只有全部操作通过验证后，插件才会在克隆 DOM 上使用 `textContent` 创建固定的公式节点，并一次性保存笔记。失败、取消、返回冲突或处理期间笔记被再次编辑时，不会写回结果。
 
-同一篇笔记中可以包含多个公式，插件会分别转换。语义化代码块会被跳过：
+## 下载与安装
 
-````markdown
-```latex
-$$R_{\text{format}} = 1$$
-```
-````
+推荐从 GitHub Releases 下载已经构建好的插件：
 
-## 安装
+**[下载最新版 zotero-math-patch.xpi](https://github.com/DragonGong/zotero-math-patch/releases/latest/download/zotero-math-patch.xpi)**
 
-从源码构建 XPI：
+1. 在 Zotero 中打开 `工具` -> `插件`。
+2. 点击插件管理器右上角的齿轮。
+3. 选择 `Install Add-on From File...`。
+4. 选择下载的 `zotero-math-patch.xpi`。
+5. 按 Zotero 提示重启。
+
+覆盖安装新版本会保留 Math Patch 设置和本机凭据存储中的 API Key。插件通过仓库中的 `updates.json` 检查后续版本，也可以随时从 Releases 手动升级。
+
+兼容范围为 Zotero 7.0 至 9.0.x；v0.2.4 已在 Windows 上的 Zotero 9.0.5 中完成实际安装和功能测试。
+
+### 从源码构建
 
 ```sh
 npm install
@@ -103,96 +79,127 @@ npm test
 npm run build
 ```
 
-构建产物路径：
+构建产物：
 
 ```text
 builds/zotero-math-patch.xpi
 ```
 
-在 Zotero 中安装：
+## 配置 AI
 
-1. 打开 Zotero。
-2. 进入 `工具` -> `插件`。
-3. 点击插件页面右上角的齿轮图标。
-4. 选择 `Install Add-on From File...`。
-5. 选择 `builds/zotero-math-patch.xpi`。
-6. 如果 Zotero 提示重启，请重启 Zotero。
+1. 打开 Zotero 设置。Windows/Linux 通常是 `编辑` -> `设置`，macOS 是 `Zotero` -> `设置`。
+2. 在左侧选择独立的 `Math Patch` 栏目。
+3. 接口类型选择 `OpenAI Compatible`。
+4. 填写接口地址、API Key、模型名称和超时时间。
+5. 点击 `Test Connection`。测试只发送一个最小 JSON 请求，不发送笔记内容。
 
-如果你要安装新的本地构建版本，直接用新的 XPI 覆盖安装即可；如 Zotero 插件页面提示需要重启，则重启 Zotero。
+设置修改后自动生效，没有额外的保存按钮。API Key 使用 Firefox/Zotero 环境的本地凭据存储，密码框不会明文显示；API Key 不写入仓库、插件普通首选项或日志。本地 vLLM 等不要求鉴权的服务可以留空 API Key。
+
+常用配置示例：
+
+| 服务 | 接口地址 | 模型名称 | API Key |
+| --- | --- | --- | --- |
+| DeepSeek | `https://api.deepseek.com` | `deepseek-v4-flash` | 必填 |
+| DeepSeek 旧兼容名 | `https://api.deepseek.com` | `deepseek-chat` | 必填 |
+| 本地 vLLM | `http://localhost:8000/v1` | vLLM 启动时加载的模型名 | 通常可留空 |
+| 其他兼容服务 | 服务商提供的 Base URL，通常以 `/v1` 结尾 | 服务商模型 ID | 按服务要求 |
+
+DeepSeek 官方已声明 `deepseek-chat` 将于 2026-07-24 停用；新配置建议使用当前模型名。可查看 [DeepSeek API 文档](https://api-docs.deepseek.com/) 和 [vLLM OpenAI Compatible Server 文档](https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html) 获取最新参数。
+
+对官方 `api.deepseek.com` 的 `deepseek-v4-flash` 和 `deepseek-v4-pro`，插件会关闭思考模式。公式修复是受严格 JSON 协议约束的提取任务，关闭思考模式可以减少延迟，并避免思考内容占用输出额度。
+
+插件会自动在 Base URL 后追加 `/chat/completions`，因此不要把完整的 `/chat/completions` 路径填进接口地址。
+
+## AI 设置
+
+- `Request timeout (ms)`：每个模型请求的超时。默认 `120000`（120 秒）；云端模型建议使用 `120000` 到 `180000`。连接测试只发送极短请求，测试成功不代表整篇笔记也能在很短的超时内完成。
+- `Show a preview before modifying the note`：默认开启，应用前显示行内/块级数量、每项原文和恢复后的 LaTeX。
+- `Default processing range`：整篇笔记、当前选中内容、优先选中内容否则整篇。
+- `Maximum characters per request`：长笔记按块级节点分批，不会从文本中间硬截断。云端接口建议从 `8000` 到 `12000` 开始；请求仍然超时时可以继续调低。
+- `Maximum output tokens`：传给兼容接口的 `max_tokens`。
+- `System prompt`：可编辑；`Restore Default Prompt` 可恢复内置安全提示词。
+
+长笔记分批时会尽量携带相邻文本块作为上下文。不同批次的完全相同操作会去重；针对同一原文的不同结果或重叠修改会终止整个写回。
 
 ## 使用方法
 
-1. 把包含 Markdown 公式的内容粘贴进 Zotero note 或 Better Notes note。
-2. 保持该笔记处于打开状态，或在 Zotero 文献库中选中该笔记条目。
-3. 在 Zotero 主窗口点击 `工具` -> `Render Markdown Math`。
-4. 如果笔记是单独窗口打开的，点击 `编辑` -> `Render Markdown Math`。
-5. 插件会弹出结果提示，显示本次转换了多少个块级公式和行内公式。
+### 本地规则
 
-这个命令是手动触发的。后续如果又粘贴了新公式，需要再次执行 `Render Markdown Math`。
+1. 打开或选中一个可编辑的 Zotero 笔记。
+2. 主窗口使用 `工具` -> `Render Markdown Math`；单独笔记窗口使用 `编辑` -> `Render Markdown Math`。
+3. 插件显示转换的块级和行内公式数量。
 
-## 快速验证
+规则模式继续支持：
 
-可以新建一个测试笔记，粘贴下面内容后执行 `Render Markdown Math`：
+```markdown
+这是 $R_{name}$ 的定义。
 
-````markdown
-这是 $R_{\text{name}}$ 的定义。
-
-$$R_{\text{format}} = 1$$
-
-$$ R_{\text{name}} = \frac{|N_G \cap N_P|}{|N_G \cup N_P|} $$
-
-$$
-R_{\text{multi}} = 2
-$$
+$$R_{format} = 1$$
 
 [
-TTCP_i=\frac{d_i}{v_i}
+TTCP_i = \frac{d_i}{v_i}
 ]
 
 其中 (d_i) 是车 (i) 到冲突点的距离，比较 (\Delta TTCP)。
-
-```latex
-$$R_{\text{code}} = 3$$
 ```
-````
 
-预期结果：
+普通括号文字如 `(Better Notes)`、`(2026)` 不会被规则模式误转；已有 `.math`、`code`、`pre`、`script` 和 `style` 内容会被跳过。
 
-- 行内公式、两种同一行块级公式、多行块级公式、方括号块级公式都会转换成可渲染公式。
-- `(d_i)`、`(i)` 和 `(\Delta TTCP)` 会转换成行内公式。
-- 如果最后一段已经被 Zotero 保存为真正的代码块，则其中的 `$$...$$` 不会被转换。
+### 大模型处理
 
-## 故障排查
+1. 先在 `Math Patch` 设置中完成配置和连接测试。
+2. 打开或选中一个可编辑笔记。
+3. 主窗口使用 `工具` -> `Process Math with AI`；单独笔记窗口使用 `编辑` -> `Process Math with AI`。
+4. 等待模型识别并返回操作。
+5. 检查预览，点击 `Apply` 或 `Cancel`。
+6. 成功后提示行内公式数、块级公式数和使用的模型。
 
-- 菜单中没有 `Render Markdown Math`：确认插件已启用，并在 Zotero 插件页面按提示重启 Zotero。
-- 安装 XPI 时提示不兼容：重新运行 `npm run build`，确认安装的是 `builds/zotero-math-patch.xpi`，并确认 Zotero 版本为 7 或更新版本。
-- 提示 `No current Zotero note found.`：先打开一个笔记标签页，或在 Zotero 文献库中选中一个笔记条目。
-- 提示 `No Markdown math delimiters found.`：当前笔记中没有插件支持的 `$...$`、`$$...$$`、方括号块级公式或括号内短公式，或这些内容已经转换过。
-- 插件页面显示已启用但菜单中没有 `Render Markdown Math`：重新运行 `npm run build` 并安装新生成的 XPI。Windows 构建会确保 XPI 内部路径使用 `chrome/content/...`，避免 Zotero 无法加载脚本。
-- 转换后没有立即刷新：关闭并重新打开该笔记；如果仍未显示，检查 Zotero 插件页面和错误控制台。
+请求有超时限制，同一笔记处理期间两个命令都会暂时禁用。插件停用时会取消仍在进行的请求。
 
-## 开发
+### 请求错误排查
 
-安装依赖并运行转换器测试：
+- `The model request timed out after ...`：当前批次没有在设置的时间内完成。提高 `Request timeout`，或降低 `Maximum characters per request` 后重试。
+- `The model JSON response was truncated ...`：提高 `Maximum output tokens`。
+- `The model returned an empty JSON response` 或 `The model did not return valid JSON`：服务已经响应，但没有遵守 JSON 协议。可以先重试连接测试；持续出现时检查模型是否支持 `response_format: {"type":"json_object"}`。
+
+上述错误都发生在保存之前，原笔记不会被修改。
+
+### 插件问题排查
+
+- 菜单中没有 `Render Markdown Math` 或 `Process Math with AI`：确认插件已启用且版本为 v0.2.4，然后重启 Zotero。
+- AI 预览窗口为空白：v0.2.4 已改为通过 Zotero 注册的 `chrome://` 页面打开预览；覆盖安装后必须重启 Zotero，避免旧窗口代码仍留在内存中。
+- 安装时提示不兼容：确认 Zotero 版本处于 7.0 至 9.0.x，并确认选择的是 `.xpi` 文件而不是源码压缩包。
+- `Test Connection` 成功但处理笔记超时：连接测试只发送极短请求；把 `Request timeout` 调到 `120000` 或更高，并适当降低单次请求字符数。
+
+## 数据与隐私
+
+AI 模式会发送普通文本块及其 `id`、`tag` 和 `text`。为帮助识别跨段公式，长笔记批次可能包含少量相邻普通文本上下文。
+
+以下内容不会作为可修改文本发送：
+
+- 已有 `.math` 公式节点；
+- `code`、`pre`、`script`、`style`；
+- 图片；
+- 链接文本和链接地址；
+- Zotero 引用、附件、批注等特殊节点。
+
+这些位置在相邻文本中只表示为受保护占位符。插件不记录完整请求体、完整响应体或笔记正文，也不会执行模型返回的 HTML 或脚本。
+
+**使用第三方模型时，待处理笔记文本会发送到用户配置的第三方接口，数据处理和隐私规则由对应服务商决定。**
+
+只有手动执行 `Process Math with AI` 才会发起请求。`Render Markdown Math` 始终完全在本地运行。
+
+## 开发与测试
 
 ```sh
 npm install
 npm test
-```
-
-构建 Zotero 插件包：
-
-```sh
 npm run build
 ```
 
-检查生成的 XPI：
+测试使用 mock HTTP，不调用真实或付费模型接口。测试覆盖规则模式回归、安全文本块提取、行内/块级应用、出现次数定位、格式保持、预览窗口及确认/取消操作、非法协议、重叠冲突、批次合并、超时、取消、网络/API 错误脱敏和原子工作流。
 
-```sh
-unzip -t builds/zotero-math-patch.xpi
-```
-
-在 Windows 上也可以用 PowerShell 检查 XPI 内部路径是否使用正斜杠：
+Windows 下检查 XPI 内容：
 
 ```powershell
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -201,27 +208,35 @@ $zip.Entries | Select-Object FullName
 $zip.Dispose()
 ```
 
-## 项目结构
+XPI 内部路径必须使用 `chrome/content/...` 正斜杠格式。
+
+## 主要文件
 
 ```text
-manifest.json                 Zotero 插件 manifest
-install.rdf                   Zotero 6/旧式兼容元数据
-chrome.manifest               旧式 chrome content 映射
-bootstrap.js                  Zotero bootstrap 入口
-chrome/content/math-renderer.js
-                              菜单注册、当前笔记查找、保存和刷新
-chrome/content/converter.js   Markdown 公式到 Zotero math HTML 的转换逻辑
-scripts/build-xpi.js          跨平台 XPI 构建脚本
-test/converter.test.js        Node 环境下的转换器测试
-docs/assets/                  README 截图和示意图
+bootstrap.js                       Zotero 启动和脚本加载
+prefs.js                           Zotero 7 默认首选项
+chrome/content/converter.js        原规则转换器
+chrome/content/math-renderer.js    菜单、笔记定位、保存和刷新
+chrome/content/settings.js         设置默认值和统一读取
+chrome/content/credentials.js      本地 API Key 凭据存储
+chrome/content/ai-provider.js      OpenAI Compatible Provider
+chrome/content/ai-core.js          安全提取、验证、DOM 应用、分批合并
+chrome/content/ai-workflow.js      原子 AI 处理流程
+chrome/content/preferences.*       Math Patch 设置面板
+chrome/content/preview.*           修改预览窗口
+test/                              规则、核心、Provider 和工作流测试
+scripts/build-xpi.js               跨平台 XPI 构建
 ```
 
-## 已知限制
+## 当前限制
 
-- 粘贴后不会自动转换，必须手动执行 `Render Markdown Math`。
-- 只处理当前笔记，不会批量处理整个文献库或分类。
-- 这不是完整 Markdown 解析器。插件会跳过 `<pre>` 和 `<code>` 等语义化代码块，但如果 Zotero 没有把三反引号内容转换成真正的代码块，原始三反引号文本仍可能被当作普通文本处理。
-- 行内公式不能包含换行。为了减少误转换，`$ x $` 这种分隔符内部带首尾空格的行内公式会被忽略。
-- 独立块级公式会自动去掉 `$$` 内侧首尾空格。
-- 不支持嵌套或不成对的美元符号分隔符。
-- 插件只创建 Zotero math 节点，本身不实现 KaTeX 或 MathJax 渲染器。
+- 当前版本完整实现整篇笔记处理。Zotero 编辑器选区尚未可靠映射到安全 DOM 块；选择“当前选中内容”会明确提示暂不支持，“优先选中内容”当前回退到整篇笔记。
+- 第一版只实现 OpenAI Compatible Chat Completions，不支持 Anthropic/Gemini 原生协议。
+- 兼容服务需要接受 `temperature: 0`、`max_tokens` 和 `response_format: {"type":"json_object"}`。部分旧服务若不支持 JSON mode，连接测试会失败。
+- 单个文本块若本身超过单次请求字符上限，插件会停止并提示提高上限，不会把段落从中间截断。
+- 公式识别质量取决于所选模型；本地严格验证可以阻止越界写回，但不能保证模型恢复出的数学含义一定正确，因此默认开启预览。
+- 插件只创建 Zotero 公式节点，本身不实现 KaTeX 或 MathJax 渲染器。
+
+## 发布
+
+发布记录和可安装 XPI 位于 [GitHub Releases](https://github.com/DragonGong/zotero-math-patch/releases)。每个发布资产都附带 SHA-256 校验值；版本变化见 [CHANGELOG.md](CHANGELOG.md)。

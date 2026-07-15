@@ -86,6 +86,9 @@ async function startup(data) {
     DOMParser: domWindow.DOMParser,
     XMLSerializer: domWindow.XMLSerializer,
     NodeFilter: domWindow.NodeFilter,
+    AbortController: domWindow.AbortController,
+    URL: domWindow.URL,
+    fetch: domWindow.fetch.bind(domWindow),
     setTimeout: domWindow.setTimeout.bind(domWindow),
     clearTimeout: domWindow.clearTimeout.bind(domWindow),
     console: sandboxConsole,
@@ -97,6 +100,26 @@ async function startup(data) {
 
   Services.scriptloader.loadSubScript(
     rootURI + "chrome/content/converter.js",
+    sandbox,
+  );
+  Services.scriptloader.loadSubScript(
+    rootURI + "chrome/content/settings.js",
+    sandbox,
+  );
+  Services.scriptloader.loadSubScript(
+    rootURI + "chrome/content/credentials.js",
+    sandbox,
+  );
+  Services.scriptloader.loadSubScript(
+    rootURI + "chrome/content/ai-core.js",
+    sandbox,
+  );
+  Services.scriptloader.loadSubScript(
+    rootURI + "chrome/content/ai-provider.js",
+    sandbox,
+  );
+  Services.scriptloader.loadSubScript(
+    rootURI + "chrome/content/ai-workflow.js",
     sandbox,
   );
   Services.scriptloader.loadSubScript(

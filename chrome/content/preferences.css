@@ -1,0 +1,54 @@
+#zotero-math-patch-preferences-root {
+  max-width: 760px;
+}
+
+.zotero-math-patch-form-grid {
+  display: grid;
+  grid-template-columns: minmax(170px, auto) minmax(280px, 1fr);
+  gap: 10px 14px;
+  align-items: center;
+}
+
+.zotero-math-patch-form-grid > label {
+  text-align: end;
+}
+
+.zotero-math-patch-form-grid input,
+#zotero-math-patch-system-prompt {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+#zotero-math-patch-system-prompt {
+  min-height: 280px;
+  resize: vertical;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  line-height: 1.45;
+}
+
+.zotero-math-patch-actions {
+  margin-top: 10px;
+  gap: 10px;
+}
+
+#zotero-math-patch-connection-status[data-state="success"] {
+  color: #2e7d32;
+}
+
+#zotero-math-patch-connection-status[data-state="warning"] {
+  color: #9a6700;
+}
+
+#zotero-math-patch-connection-status[data-state="error"] {
+  color: #b3261e;
+}
+
+@media (max-width: 620px) {
+  .zotero-math-patch-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .zotero-math-patch-form-grid > label {
+    text-align: start;
+  }
+}

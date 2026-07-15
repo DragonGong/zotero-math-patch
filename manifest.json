@@ -1,15 +1,15 @@
 {
   "manifest_version": 2,
-  "name": "Zotero Markdown Math Patch",
-  "version": "0.1.9",
-  "description": "Manually renders pasted Markdown math in Zotero notes.",
-  "author": "Local",
+  "name": "Zotero Math Patch",
+  "version": "0.2.4",
+  "description": "Repairs pasted math in Zotero notes with local rules or a user-configured AI service.",
+  "author": "DragonGong",
   "applications": {
     "zotero": {
       "id": "zotero-math-patch@local",
-      "update_url": "https://example.com/zotero-math-patch/updates.json",
+      "update_url": "https://raw.githubusercontent.com/DragonGong/zotero-math-patch/main/updates.json",
       "strict_min_version": "7.0.0",
-      "strict_max_version": "10.99.99"
+      "strict_max_version": "9.0.*"
     }
   }
 }
