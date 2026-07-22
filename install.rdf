@@ -6,7 +6,7 @@
       RDF:about="urn:mozilla:install-manifest"
       em:id="zotero-math-patch@local"
       em:name="Zotero Math Patch"
-      em:version="0.2.4"
+      em:version="0.3.3"
       em:type="2"
       em:creator="DragonGong"
       em:description="Repairs pasted math in Zotero notes with local rules or a user-configured AI service."

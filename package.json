@@ -1,6 +1,6 @@
 {
   "name": "zotero-math-patch",
-  "version": "0.2.4",
+  "version": "0.3.3",
   "private": true,
   "description": "Rule-based and AI-assisted math repair for Zotero notes.",
   "scripts": {

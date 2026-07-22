@@ -18,12 +18,28 @@
     "STYLE",
     "VIDEO",
   ]);
+  const UNAMBIGUOUS_MARKUP_TAGS = new Set([
+    "abbr", "address", "article", "aside", "audio", "base", "blockquote", "body", "br",
+    "button", "canvas", "caption", "circle", "code", "col", "data", "datalist", "dd",
+    "defs", "details", "dialog", "div", "dl", "dt", "ellipse", "embed", "fieldset",
+    "figcaption", "figure", "footer", "foreignobject", "form", "head", "header", "hgroup",
+    "html", "iframe", "image", "img", "input", "label", "legend", "li", "line", "link",
+    "main", "map", "mark", "math", "menu", "meta", "meter", "mi", "mn", "mo", "mrow",
+    "nav", "noscript", "object", "ol", "optgroup", "option", "output", "path", "picture",
+    "polygon", "polyline", "pre", "progress", "rect", "script", "section", "select", "slot",
+    "small", "source", "span", "strong", "style", "sub", "summary", "sup", "svg", "table",
+    "tbody", "td", "template", "text", "textarea", "tfoot", "th", "thead", "time", "title",
+    "tr", "track", "ul", "video",
+  ]);
 
   class AIValidationError extends Error {
-    constructor(code, message) {
+    constructor(code, message, options = {}) {
       super(message);
       this.name = "AIValidationError";
       this.code = code;
+      this.operationIndex = Number.isInteger(options.operationIndex)
+        ? options.operationIndex
+        : null;
     }
   }
 
@@ -143,24 +159,32 @@
     const coverageByBlock = new Map();
 
     parsed.operations.forEach((operation, operationIndex) => {
-      assertPlainObject(operation, `Operation ${operationIndex + 1} must be an object.`);
-      if (operation.type === "inline") {
-        const result = validateInlineOperation(operation, context, allowedBlockIDs, operationIndex);
-        operations.push(result.operation);
-        metadata.push(result.metadata);
-        addCoverage(result.metadata.coverage, coverageByBlock, operationIndex);
-        return;
-      }
-      if (operation.type === "block") {
-        const result = validateBlockOperation(operation, context, allowedBlockIDs, operationIndex);
-        operations.push(result.operation);
-        metadata.push(result.metadata);
-        for (const coverage of result.metadata.coverage) {
-          addCoverage(coverage, coverageByBlock, operationIndex);
+      try {
+        assertPlainObject(operation, `Operation ${operationIndex + 1} must be an object.`);
+        if (operation.type === "inline") {
+          const result = validateInlineOperation(operation, context, allowedBlockIDs, operationIndex);
+          operations.push(result.operation);
+          metadata.push(result.metadata);
+          addCoverage(result.metadata.coverage, coverageByBlock, operationIndex);
+          return;
         }
-        return;
+        if (operation.type === "block") {
+          const result = validateBlockOperation(operation, context, allowedBlockIDs, operationIndex);
+          operations.push(result.operation);
+          metadata.push(result.metadata);
+          for (const coverage of result.metadata.coverage) {
+            addCoverage(coverage, coverageByBlock, operationIndex);
+          }
+          return;
+        }
+        throw validationError("invalid_type", `Operation ${operationIndex + 1} has an invalid type.`);
       }
-      throw validationError("invalid_type", `Operation ${operationIndex + 1} has an invalid type.`);
+      catch (error) {
+        if (error instanceof AIValidationError && !Number.isInteger(error.operationIndex)) {
+          error.operationIndex = operationIndex;
+        }
+        throw error;
+      }
     });
 
     return {
@@ -182,6 +206,88 @@
     }
   }
 
+  function applyOperationRepair(payload, repairPayload, context, options = {}) {
+    const parsed = parseModelPayload(payload);
+    assertPlainObject(parsed, "The candidate model response must be a JSON object.");
+    if (!Array.isArray(parsed.operations)) {
+      throw validationError("invalid_schema", "The candidate response operations field must be an array.");
+    }
+
+    const repair = parseModelPayload(repairPayload);
+    assertPlainObject(repair, "The model repair response must be a JSON object.");
+    assertExactKeys(
+      repair,
+      ["operationIndex", "replacement"],
+      "The model repair response contains unsupported fields.",
+    );
+    const expectedIndex = options.operationIndex;
+    if (
+      !Number.isInteger(expectedIndex)
+      || expectedIndex < 0
+      || expectedIndex >= parsed.operations.length
+      || repair.operationIndex !== expectedIndex + 1
+    ) {
+      throw validationError(
+        "invalid_repair",
+        "The model repair response does not target the requested operation.",
+        expectedIndex,
+      );
+    }
+    assertPlainObject(repair.replacement, "The model repair replacement must be an object.");
+
+    const allowedBlockIDs = options.allowedBlockIds
+      ? new Set(options.allowedBlockIds)
+      : null;
+    let replacement;
+    try {
+      if (repair.replacement.type === "inline") {
+        const validation = validateModelResponse(
+          { operations: [repair.replacement] },
+          context,
+          { allowedBlockIds: options.allowedBlockIds },
+        );
+        replacement = validation.operations[0];
+      }
+      else if (repair.replacement.type === "block") {
+        assertExactKeys(
+          repair.replacement,
+          ["type", "blockIds", "latex"],
+          "A repaired block operation must contain only type, blockIds, and latex.",
+        );
+        validateBlockIDs(repair.replacement.blockIds, expectedIndex);
+        const records = getSafeBlockRecords(
+          repair.replacement.blockIds,
+          context,
+          allowedBlockIDs,
+          expectedIndex,
+        );
+        replacement = {
+          type: "block",
+          blockIds: records.map((record) => record.id),
+          source: records.map((record) => record.text).join("\n"),
+          latex: validateLatex(repair.replacement.latex, expectedIndex),
+        };
+      }
+      else {
+        throw validationError(
+          "invalid_repair",
+          "The repaired operation has an invalid type.",
+          expectedIndex,
+        );
+      }
+    }
+    catch (error) {
+      if (error instanceof AIValidationError) {
+        error.operationIndex = expectedIndex;
+      }
+      throw error;
+    }
+
+    const operations = parsed.operations.slice();
+    operations[expectedIndex] = replacement;
+    return { operations };
+  }
+
   function validateInlineOperation(operation, context, allowedBlockIDs, operationIndex) {
     assertExactKeys(
       operation,
@@ -200,14 +306,19 @@
     if (operation.source.includes(PROTECTED_CONTENT)) {
       throw validationError("protected_content", `Operation ${operationIndex + 1} targets protected note content.`);
     }
-    if (!looksLikeMathSource(operation.source, "inline")) {
-      throw validationError("not_math", `Operation ${operationIndex + 1} source does not look like a mathematical expression.`);
-    }
 
-    const record = getRecord(context, operation.blockId, allowedBlockIDs, operationIndex);
-    const range = findOccurrenceRange(record.text, operation.source, operation.occurrence);
+    let record = getRecord(context, operation.blockId, allowedBlockIDs, operationIndex);
+    let range = findOccurrenceRange(record.text, operation.source, operation.occurrence);
     if (!range) {
-      throw validationError("source_mismatch", `Operation ${operationIndex + 1} source and occurrence do not match the original block.`);
+      const relocated = findUniqueEditableInlineTarget(context, operation.source, allowedBlockIDs);
+      if (!relocated) {
+        throw validationError(
+          "source_mismatch",
+          `Operation ${operationIndex + 1} source, blockId, and occurrence do not identify one unique editable location in the request batch.`,
+        );
+      }
+      record = relocated.record;
+      range = relocated.range;
     }
     if (!rangeIsEditable(record, range.start, range.end)) {
       throw validationError("protected_content", `Operation ${operationIndex + 1} crosses protected or non-text content.`);
@@ -216,9 +327,9 @@
     return {
       operation: {
         type: "inline",
-        blockId: operation.blockId,
+        blockId: record.id,
         source: operation.source,
-        occurrence: operation.occurrence,
+        occurrence: range.occurrence,
         latex,
       },
       metadata: {
@@ -241,15 +352,7 @@
       ["type", "blockIds", "source", "latex"],
       `Block operation ${operationIndex + 1} has missing or unsupported fields.`,
     );
-    if (!Array.isArray(operation.blockIds) || !operation.blockIds.length) {
-      throw validationError("invalid_block_ids", `Operation ${operationIndex + 1} blockIds must be a non-empty array.`);
-    }
-    if (operation.blockIds.some((id) => typeof id !== "string")) {
-      throw validationError("invalid_block_ids", `Operation ${operationIndex + 1} blockIds must contain strings only.`);
-    }
-    if (new Set(operation.blockIds).size !== operation.blockIds.length) {
-      throw validationError("invalid_block_ids", `Operation ${operationIndex + 1} repeats a blockId.`);
-    }
+    validateBlockIDs(operation.blockIds, operationIndex);
     assertString(operation.source, "source", operationIndex);
     const latex = validateLatex(operation.latex, operationIndex);
     if (!operation.source || operation.source.length > MAX_SOURCE_LENGTH) {
@@ -258,32 +361,26 @@
     if (operation.source.includes(PROTECTED_CONTENT)) {
       throw validationError("protected_content", `Operation ${operationIndex + 1} targets protected note content.`);
     }
-    if (!looksLikeMathSource(operation.source, "block")) {
-      throw validationError("not_math", `Operation ${operationIndex + 1} source does not look like a standalone mathematical expression.`);
-    }
 
-    const records = operation.blockIds.map((id) => getRecord(context, id, allowedBlockIDs, operationIndex));
-    for (const record of records) {
-      if (!record.allowBlockReplacement || record.text.includes(PROTECTED_CONTENT)) {
-        throw validationError("protected_content", `Operation ${operationIndex + 1} cannot replace this block safely.`);
-      }
-    }
-    for (let i = 1; i < records.length; i++) {
-      if (records[i].index !== records[i - 1].index + 1 || !areAdjacentSiblingBlocks(records[i - 1], records[i])) {
-        throw validationError("non_contiguous_blocks", `Operation ${operationIndex + 1} blockIds are not contiguous sibling blocks.`);
-      }
-    }
-
+    const records = getSafeBlockRecords(
+      operation.blockIds,
+      context,
+      allowedBlockIDs,
+      operationIndex,
+    );
     const exactSource = records.map((record) => record.text).join("\n");
     if (operation.source !== exactSource) {
-      throw validationError("source_mismatch", `Operation ${operationIndex + 1} source does not exactly match its blocks.`);
+      throw validationError(
+        "source_mismatch",
+        `Operation ${operationIndex + 1} source does not exactly match its blocks.`,
+      );
     }
 
     return {
       operation: {
         type: "block",
-        blockIds: operation.blockIds.slice(),
-        source: operation.source,
+        blockIds: records.map((record) => record.id),
+        source: exactSource,
         latex,
       },
       metadata: {
@@ -499,16 +596,89 @@
   }
 
   function findOccurrenceRange(text, source, occurrence) {
+    const ranges = findOccurrenceRanges(text, source);
+    if (occurrence <= ranges.length) {
+      return ranges[occurrence - 1];
+    }
+    if (ranges.length === 1) {
+      return ranges[0];
+    }
+    return null;
+  }
+
+  function findOccurrenceRanges(text, source) {
+    const ranges = [];
     let offset = 0;
-    let found = -1;
-    for (let count = 0; count < occurrence; count++) {
-      found = text.indexOf(source, offset);
+    while (offset <= text.length - source.length) {
+      const found = text.indexOf(source, offset);
       if (found === -1) {
-        return null;
+        break;
       }
+      ranges.push({
+        start: found,
+        end: found + source.length,
+        occurrence: ranges.length + 1,
+      });
       offset = found + source.length;
     }
-    return { start: found, end: found + source.length };
+    return ranges;
+  }
+
+  function findUniqueEditableInlineTarget(context, source, allowedBlockIDs) {
+    const candidates = [];
+    for (const record of context?.records || []) {
+      if (allowedBlockIDs && !allowedBlockIDs.has(record.id)) {
+        continue;
+      }
+      for (const range of findOccurrenceRanges(record.text, source)) {
+        if (rangeIsEditable(record, range.start, range.end)) {
+          candidates.push({ record, range });
+        }
+      }
+    }
+    return candidates.length === 1 ? candidates[0] : null;
+  }
+
+  function areContiguousBlockRecords(records) {
+    for (let index = 1; index < records.length; index++) {
+      if (
+        records[index].index !== records[index - 1].index + 1
+        || !areAdjacentSiblingBlocks(records[index - 1], records[index])
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function validateBlockIDs(blockIDs, operationIndex) {
+    if (!Array.isArray(blockIDs) || !blockIDs.length) {
+      throw validationError("invalid_block_ids", `Operation ${operationIndex + 1} blockIds must be a non-empty array.`);
+    }
+    if (blockIDs.some((id) => typeof id !== "string")) {
+      throw validationError("invalid_block_ids", `Operation ${operationIndex + 1} blockIds must contain strings only.`);
+    }
+    if (new Set(blockIDs).size !== blockIDs.length) {
+      throw validationError("invalid_block_ids", `Operation ${operationIndex + 1} repeats a blockId.`);
+    }
+  }
+
+  function getSafeBlockRecords(blockIDs, context, allowedBlockIDs, operationIndex) {
+    const records = blockIDs.map(
+      (id) => getRecord(context, id, allowedBlockIDs, operationIndex),
+    );
+    for (const record of records) {
+      if (!record.allowBlockReplacement || record.text.includes(PROTECTED_CONTENT)) {
+        throw validationError("protected_content", `Operation ${operationIndex + 1} cannot replace this block safely.`);
+      }
+    }
+    if (!areContiguousBlockRecords(records)) {
+      throw validationError(
+        "non_contiguous_blocks",
+        `Operation ${operationIndex + 1} blockIds are not contiguous sibling blocks.`,
+      );
+    }
+    return records;
   }
 
   function rangeIsEditable(record, start, end) {
@@ -547,49 +717,88 @@
     if (!normalized || normalized.length > MAX_LATEX_LENGTH) {
       throw validationError("invalid_latex", `Operation ${operationIndex + 1} latex is empty or oversized.`);
     }
-    if (normalized.includes("$") || /<\s*\/?\s*[A-Za-z][^>]*>/.test(normalized)) {
+    if (normalized.includes("$") || containsHTMLMarkup(normalized)) {
       throw validationError("unsafe_latex", `Operation ${operationIndex + 1} latex contains delimiters or HTML.`);
     }
     if (/\\(?:htmlClass|htmlId|htmlStyle|href|url|includegraphics)\b/i.test(normalized)) {
       throw validationError("unsafe_latex", `Operation ${operationIndex + 1} latex contains a disallowed command.`);
     }
+    if (!hasBalancedLatexBraces(normalized)) {
+      throw validationError("invalid_latex", `Operation ${operationIndex + 1} latex contains unbalanced braces.`);
+    }
     return normalized;
   }
 
-  function looksLikeMathSource(source, type) {
-    const trimmed = String(source || "").trim();
-    if (!trimmed || /[\r\n]/.test(trimmed) && type === "inline") {
-      return false;
-    }
-    if (/^\$\$?[\s\S]+\$\$?$/.test(trimmed) || /^\\[([][\s\S]+\\[)\]]$/.test(trimmed)) {
+  function containsHTMLMarkup(latex) {
+    if (/<!--|-->|<!\s*doctype\b|<!\[CDATA\[|<\?xml\b/i.test(latex)) {
       return true;
     }
 
-    let content = trimmed;
-    const paired = (trimmed.startsWith("(") && trimmed.endsWith(")"))
-      || (trimmed.startsWith("[") && trimmed.endsWith("]"));
-    if (paired) {
-      content = trimmed.slice(1, -1).trim();
-      if (/^[A-Za-z]$/.test(content)) {
+    const tagPattern = /<\s*(\/?)\s*([A-Za-z][A-Za-z0-9:-]*)([^<>]*)>/g;
+    let match;
+    while ((match = tagPattern.exec(latex))) {
+      const closing = !!match[1];
+      const tagName = match[2].toLowerCase();
+      const remainder = match[3];
+      if (!isValidHTMLTagRemainder(remainder)) {
+        continue;
+      }
+      const trimmedRemainder = remainder.trim();
+      const selfClosing = trimmedRemainder.endsWith("/");
+      const hasAttributes = trimmedRemainder.replace(/\/$/, "").trim().length > 0;
+      if (closing || selfClosing || hasAttributes || tagName.includes("-")
+        || UNAMBIGUOUS_MARKUP_TAGS.has(tagName)) {
         return true;
       }
     }
+    return false;
+  }
 
-    const hasCommand = /\\[A-Za-z]+/.test(content);
-    const hasOperator = /[_^=<>+*/|{}]|(?:<=|>=|!=|:=|->)/.test(content);
-    const hasUnicodeMath = /[α-ωΑ-Ω∑∏√∞≈≠≤≥∂∇∫±×÷∈∉⊂⊆∪∩→←↔]/u.test(content);
-    const hasMixedVariableNumber = /(?:[A-Za-z]\d|\d[A-Za-z])/.test(content);
-    if (!(hasCommand || hasOperator || hasUnicodeMath || hasMixedVariableNumber)) {
-      return false;
+  function isValidHTMLTagRemainder(remainder) {
+    if (!remainder) {
+      return true;
     }
+    return /^(?:\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*\s*\/?\s*$/.test(remainder);
+  }
 
-    if (type === "block" && !paired && !hasCommand) {
-      const wordCount = (content.match(/[A-Za-z]{2,}/g) || []).length;
-      if (wordCount > 3 && /[.!?。！？]\s*$/.test(content)) {
+  function hasBalancedLatexBraces(latex) {
+    let depth = 0;
+    let inComment = false;
+    for (let index = 0; index < latex.length; index++) {
+      const character = latex[index];
+      if (character === "\n" || character === "\r") {
+        inComment = false;
+        continue;
+      }
+      if (inComment) {
+        continue;
+      }
+      if (character === "%" && !isEscaped(latex, index)) {
+        inComment = true;
+        continue;
+      }
+      if ((character !== "{" && character !== "}") || isEscaped(latex, index)) {
+        continue;
+      }
+      if (character === "{") {
+        depth++;
+      }
+      else if (depth === 0) {
         return false;
       }
+      else {
+        depth--;
+      }
     }
-    return true;
+    return depth === 0;
+  }
+
+  function isEscaped(text, index) {
+    let backslashes = 0;
+    for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor--) {
+      backslashes++;
+    }
+    return backslashes % 2 === 1;
   }
 
   function isInsideProtectedContent(node) {
@@ -683,8 +892,8 @@
     }
   }
 
-  function validationError(code, message) {
-    return new AIValidationError(code, message);
+  function validationError(code, message, operationIndex = null) {
+    return new AIValidationError(code, message, { operationIndex });
   }
 
   const api = {
@@ -695,10 +904,10 @@
     prepareNoteHTML,
     parseModelPayload,
     validateModelResponse,
+    applyOperationRepair,
     applyModelOperations,
     createBatches,
     mergeBatchResults,
-    looksLikeMathSource,
   };
 
   if (typeof module !== "undefined" && module.exports) {

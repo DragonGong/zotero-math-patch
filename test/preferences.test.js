@@ -7,6 +7,12 @@ module.exports = async function runPreferencePaneTests() {
   const debugMessages = [];
   const prefWrites = [];
   let capturedConfig;
+  let currentLogInfo = {
+    path: "C:\\Zotero\\profile\\zotero-math-patch\\logs",
+    isDefault: true,
+    warning: "",
+  };
+  const directoryActions = [];
   let resolveConnection;
   let connectionPromise = new Promise((resolve) => {
     resolveConnection = resolve;
@@ -33,6 +39,28 @@ module.exports = async function runPreferencePaneTests() {
       getDefaultSystemPrompt() {
         return "default prompt";
       },
+      async getLogDirectoryInfo() {
+        directoryActions.push("refresh");
+        return currentLogInfo;
+      },
+      async chooseLogDirectory() {
+        directoryActions.push("choose");
+        currentLogInfo = { path: "D:\\project\\logs", isDefault: false, warning: "" };
+        return currentLogInfo;
+      },
+      async openLogDirectory() {
+        directoryActions.push("open");
+        return currentLogInfo;
+      },
+      async resetLogDirectory() {
+        directoryActions.push("reset");
+        currentLogInfo = {
+          path: "C:\\Zotero\\profile\\zotero-math-patch\\logs",
+          isDefault: true,
+          warning: "",
+        };
+        return currentLogInfo;
+      },
     },
     Prefs: {
       set(...args) {
@@ -52,6 +80,18 @@ module.exports = async function runPreferencePaneTests() {
 
     await controller.init();
     assert.equal(elements.apiKey.value, "stored-secret");
+    assert.equal(elements.logDirectory.value, "C:\\Zotero\\profile\\zotero-math-patch\\logs");
+    assert.equal(elements.logStatus.textContent, "Using the default profile directory.");
+
+    await elements.chooseLogDirectoryButton.emit("command");
+    assert.equal(elements.logDirectory.value, "D:\\project\\logs");
+    assert.equal(elements.logStatus.textContent, "Log directory updated.");
+    await elements.openLogDirectoryButton.emit("command");
+    assert.equal(elements.logStatus.textContent, "Log directory opened.");
+    await elements.resetLogDirectoryButton.emit("command");
+    assert.equal(elements.logDirectory.value, "C:\\Zotero\\profile\\zotero-math-patch\\logs");
+    assert.equal(elements.logStatus.textContent, "Default log directory restored.");
+    assert.deepEqual(directoryActions, ["refresh", "choose", "open", "reset"]);
 
     elements.apiKey.value = "new-secret";
     const pendingTest = elements.testButton.emit("command");
@@ -88,9 +128,13 @@ module.exports = async function runPreferencePaneTests() {
     connectionPromise = Promise.reject(Object.assign(new Error("Authentication failed."), {
       name: "AIProviderError",
       code: "authentication_failed",
+      logWarning: "Diagnostic logging stopped.",
     }));
     await controller.testConnection();
-    assert.equal(elements.status.textContent, "Authentication failed.");
+    assert.equal(
+      elements.status.textContent,
+      "Authentication failed. Logging warning: Diagnostic logging stopped.",
+    );
     assert.equal(elements.status.dataset.state, "error");
     assert.equal(elements.testButton.disabled, false);
     assert.match(debugMessages.at(-1), /authentication_failed/);
@@ -131,6 +175,12 @@ function createElements() {
     "zotero-math-patch-connection-status": new FakeElement(),
     "zotero-math-patch-test-connection": new FakeElement(),
     "zotero-math-patch-reset-prompt": new FakeElement(),
+    "zotero-math-patch-logging-enabled": new FakeElement(),
+    "zotero-math-patch-log-directory": new FakeElement(),
+    "zotero-math-patch-log-directory-status": new FakeElement(),
+    "zotero-math-patch-choose-log-directory": new FakeElement(),
+    "zotero-math-patch-open-log-directory": new FakeElement(),
+    "zotero-math-patch-reset-log-directory": new FakeElement(),
     "zotero-math-patch-provider-type": new FakeElement("openai-compatible"),
     "zotero-math-patch-base-url": new FakeElement("https://api.example.com/v1"),
     "zotero-math-patch-model": new FakeElement("deepseek-chat"),
@@ -147,6 +197,21 @@ function createElements() {
     },
     get resetButton() {
       return this["zotero-math-patch-reset-prompt"];
+    },
+    get logDirectory() {
+      return this["zotero-math-patch-log-directory"];
+    },
+    get logStatus() {
+      return this["zotero-math-patch-log-directory-status"];
+    },
+    get chooseLogDirectoryButton() {
+      return this["zotero-math-patch-choose-log-directory"];
+    },
+    get openLogDirectoryButton() {
+      return this["zotero-math-patch-open-log-directory"];
+    },
+    get resetLogDirectoryButton() {
+      return this["zotero-math-patch-reset-log-directory"];
     },
   };
 }

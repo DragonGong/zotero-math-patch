@@ -31,15 +31,32 @@
   gap: 10px;
 }
 
-#zotero-math-patch-connection-status[data-state="success"] {
+.zotero-math-patch-log-directory-row {
+  margin-top: 10px;
+}
+
+.zotero-math-patch-status {
+  display: block;
+  margin-top: 8px;
+}
+
+.zotero-math-patch-privacy-warning {
+  margin: 8px 0 0;
+  line-height: 1.4;
+}
+
+#zotero-math-patch-connection-status[data-state="success"],
+#zotero-math-patch-log-directory-status[data-state="success"] {
   color: #2e7d32;
 }
 
-#zotero-math-patch-connection-status[data-state="warning"] {
+#zotero-math-patch-connection-status[data-state="warning"],
+#zotero-math-patch-log-directory-status[data-state="warning"] {
   color: #9a6700;
 }
 
-#zotero-math-patch-connection-status[data-state="error"] {
+#zotero-math-patch-connection-status[data-state="error"],
+#zotero-math-patch-log-directory-status[data-state="error"] {
   color: #b3261e;
 }
 

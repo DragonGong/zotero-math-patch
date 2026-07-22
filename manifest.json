@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Zotero Math Patch",
-  "version": "0.2.4",
+  "version": "0.3.3",
   "description": "Repairs pasted math in Zotero notes with local rules or a user-configured AI service.",
   "author": "DragonGong",
   "applications": {

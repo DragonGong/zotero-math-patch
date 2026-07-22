@@ -40,10 +40,14 @@ module.exports = async function runSettingsTests() {
   values.set(PREF_PREFIX + "timeoutMs", "9999999");
   values.set(PREF_PREFIX + "maxRequestChars", "bad");
   values.set(PREF_PREFIX + "showPreview", "false");
+  values.set(PREF_PREFIX + "loggingEnabled", "false");
+  values.set(PREF_PREFIX + "logDirectory", "  D:\\diagnostics\\logs  ");
   values.set(PREF_PREFIX + "processingScope", "invalid");
   assert.equal(store.get("timeoutMs"), 600000);
   assert.equal(store.get("maxRequestChars"), DEFAULTS.maxRequestChars);
   assert.equal(store.get("showPreview"), false);
+  assert.equal(store.get("loggingEnabled"), false);
+  assert.equal(store.get("logDirectory"), "D:\\diagnostics\\logs");
   assert.equal(store.get("processingScope"), DEFAULTS.processingScope);
 
   assert.equal(store.set("model", "  deepseek-chat  "), "deepseek-chat");
@@ -71,7 +75,13 @@ module.exports = async function runSettingsTests() {
   require("../prefs.js");
   global.pref = previousPref;
   assert.equal(prefDefaults[PREF_PREFIX + "systemPrompt"], DEFAULT_SYSTEM_PROMPT);
+  assert.match(DEFAULT_SYSTEM_PROMPT, /不能跨 block 计数/);
+  assert.match(DEFAULT_SYSTEM_PROMPT, /不要推算、递增或重编号 blockId/);
+  assert.match(DEFAULT_SYSTEM_PROMPT, /U\+000A/);
   assert.equal(prefDefaults[PREF_PREFIX + "showPreview"], true);
+  assert.equal(prefDefaults[PREF_PREFIX + "loggingEnabled"], true);
+  assert.equal(prefDefaults[PREF_PREFIX + "logDirectory"], "");
+  assert.equal(prefDefaults[PREF_PREFIX + "logDirectoryHistory"], "[]");
   assert.equal(prefDefaults[PREF_PREFIX + "timeoutMs"], DEFAULTS.timeoutMs);
   assert.equal(Object.keys(prefDefaults).some((key) => /api.?key/i.test(key)), false);
 

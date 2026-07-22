@@ -105,6 +105,40 @@
     </html:div>
   </groupbox>
 
+  <groupbox id="zotero-math-patch-logging-group" aria-labelledby="zotero-math-patch-logging-title">
+    <label><html:h2 id="zotero-math-patch-logging-title">Diagnostic logs</html:h2></label>
+    <checkbox
+      id="zotero-math-patch-logging-enabled"
+      label="Keep a local diagnostic log for each Math Patch operation"
+      preference="extensions.zotero.mathPatch.loggingEnabled"
+      native="true"
+    />
+    <html:div class="zotero-math-patch-form-grid zotero-math-patch-log-directory-row">
+      <html:label for="zotero-math-patch-log-directory">Effective log directory</html:label>
+      <html:input
+        id="zotero-math-patch-log-directory"
+        type="text"
+        readonly="readonly"
+      />
+    </html:div>
+    <hbox align="center" class="zotero-math-patch-actions">
+      <button id="zotero-math-patch-choose-log-directory" label="Choose Directory"/>
+      <button id="zotero-math-patch-open-log-directory" label="Open Directory"/>
+      <button id="zotero-math-patch-reset-log-directory" label="Use Default"/>
+    </hbox>
+    <html:span
+      id="zotero-math-patch-log-directory-status"
+      class="zotero-math-patch-status"
+      role="status"
+      aria-live="polite"
+    ></html:span>
+    <html:p class="zotero-math-patch-privacy-warning">
+      Logs are unencrypted local JSONL files and can contain complete note HTML, model requests,
+      and model responses. API keys and authentication fields are redacted. Math Patch deletes
+      its log files after a rolling 7 days.
+    </html:p>
+  </groupbox>
+
   <groupbox id="zotero-math-patch-prompt-group" aria-labelledby="zotero-math-patch-prompt-title">
     <label><html:h2 id="zotero-math-patch-prompt-title">System prompt</html:h2></label>
     <html:textarea

@@ -83,6 +83,8 @@ async function startup(data) {
     Services,
     Components,
     ChromeUtils,
+    IOUtils: domWindow.IOUtils,
+    PathUtils: domWindow.PathUtils,
     DOMParser: domWindow.DOMParser,
     XMLSerializer: domWindow.XMLSerializer,
     NodeFilter: domWindow.NodeFilter,
@@ -94,6 +96,7 @@ async function startup(data) {
     console: sandboxConsole,
     rootURI,
     pluginID: id,
+    pluginVersion: data.version,
   };
   sandbox.globalThis = sandbox;
   sandbox.self = sandbox;
@@ -104,6 +107,10 @@ async function startup(data) {
   );
   Services.scriptloader.loadSubScript(
     rootURI + "chrome/content/settings.js",
+    sandbox,
+  );
+  Services.scriptloader.loadSubScript(
+    rootURI + "chrome/content/logger.js",
     sandbox,
   );
   Services.scriptloader.loadSubScript(
@@ -139,12 +146,12 @@ function onMainWindowUnload({ window }) {
   plugin?.onWindowUnload(window);
 }
 
-function shutdown(data, reason) {
+async function shutdown(data, reason) {
   if (reason === APP_SHUTDOWN) {
     return;
   }
 
-  plugin?.shutdown();
+  await plugin?.shutdown();
   plugin = null;
 
   if (chromeHandle) {
