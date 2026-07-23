@@ -130,6 +130,10 @@ async function startup(data) {
     sandbox,
   );
   Services.scriptloader.loadSubScript(
+    rootURI + "chrome/content/ai-progress.js",
+    sandbox,
+  );
+  Services.scriptloader.loadSubScript(
     rootURI + "chrome/content/math-renderer.js",
     sandbox,
   );

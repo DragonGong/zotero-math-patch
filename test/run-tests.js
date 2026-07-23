@@ -6,6 +6,7 @@ async function run() {
   await require("./credentials.test.js")();
   await require("./preferences.test.js")();
   await require("./preview.test.js")();
+  require("./ai-progress.test.js")();
   await require("./ai-core.test.js")();
   await require("./provider.test.js")();
   await require("./workflow.test.js")();

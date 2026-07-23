@@ -3,9 +3,9 @@
     "zotero-math-patch@local": {
       "updates": [
         {
-          "version": "0.2.4",
-          "update_link": "https://github.com/DragonGong/zotero-math-patch/releases/download/v0.2.4/zotero-math-patch.xpi",
-          "update_hash": "sha256:c88a0622d072ebdb6f47888c94a767e710d72365907b5e78560cefc98d107e29",
+          "version": "0.3.8",
+          "update_link": "https://github.com/DragonGong/zotero-math-patch/releases/download/v0.3.8/zotero-math-patch.xpi",
+          "update_hash": "sha256:500a6bbecaf59622212f5dff02cf7e92d8ba08e9c9a75c63513160397c1e7d87",
           "applications": {
             "zotero": {
               "strict_min_version": "7.0.0",

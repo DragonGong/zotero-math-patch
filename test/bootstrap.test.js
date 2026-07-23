@@ -16,6 +16,11 @@ module.exports = function runBootstrapTests() {
     source.indexOf('chrome/content/logger.js') < source.indexOf('chrome/content/math-renderer.js'),
     "the logger is loaded before the runtime that consumes it",
   );
+  assert.ok(
+    source.indexOf('chrome/content/ai-workflow.js') < source.indexOf('chrome/content/ai-progress.js')
+      && source.indexOf('chrome/content/ai-progress.js') < source.indexOf('chrome/content/math-renderer.js'),
+    "the AI progress adapter is loaded before the runtime that consumes it",
+  );
 
   console.log("bootstrap tests passed");
 };

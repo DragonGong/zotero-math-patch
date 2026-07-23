@@ -5,6 +5,8 @@ const {
   PROTECTED_CONTENT,
   extractSafeTextBlocks,
   prepareNoteHTML,
+  filterUneditableInlineOperations,
+  filterRedundantOperations,
   validateModelResponse,
   applyOperationRepair,
   applyModelOperations,
@@ -16,6 +18,8 @@ module.exports = async function runAICoreTests() {
   testSafeExtraction();
   testInlineReplacementAndOccurrence();
   testBlockReplacement();
+  testReadonlyMathContextAndReconstruction();
+  testRedundantOperationCoalescing();
   testPermissiveMathSources();
   testLatexBraceValidation();
   testLatexComparisonValidation();
@@ -53,6 +57,10 @@ function testSafeExtraction() {
   assert.equal(sent.includes("attachment"), false, "attachment metadata is not sent");
   assert.equal(sent.includes("private script"), false);
   assert.ok(blocks.some((block) => block.text.includes(PROTECTED_CONTENT)));
+  const readonlyBlock = blocks.find((block) => block.readonlyMath?.length);
+  assert.equal(readonlyBlock.readonlyMath[0].latex, "existing");
+  assert.equal(readonlyBlock.readonlyMath[0].kind, "inline");
+  assert.equal(readonlyBlock.text.includes(readonlyBlock.readonlyMath[0].marker), true);
 }
 
 function testInlineReplacementAndOccurrence() {
@@ -73,14 +81,13 @@ function testInlineReplacementAndOccurrence() {
   const crossBlockHTML = '<div class="zotero-note znv1"><p>Earlier (\\gamma=1).</p><p>Target (\\gamma=1).</p></div>';
   const crossBlockContext = prepareNoteHTML(crossBlockHTML);
   const globallyCounted = inline("block-2", "(\\gamma=1)", 2, "\\gamma=1");
-  const normalized = validateModelResponse({ operations: [globallyCounted] }, crossBlockContext);
+  assertCode(() => validateModelResponse({
+    operations: [globallyCounted],
+  }, crossBlockContext), "source_mismatch");
   assert.equal(
-    normalized.operations[0].occurrence,
-    1,
-    "a unique source in its block is safely normalized when the model counted prior blocks",
-  );
-  assert.equal(
-    applyModelOperations(crossBlockHTML, { operations: [globallyCounted] }).html,
+    applyModelOperations(crossBlockHTML, {
+      operations: [inline("block-2", "(\\gamma=1)", 1, "\\gamma=1")],
+    }).html,
     '<div class="zotero-note znv1"><p>Earlier (\\gamma=1).</p><p>Target <span class="math">$\\gamma=1$</span>.</p></div>',
   );
 
@@ -92,16 +99,9 @@ function testInlineReplacementAndOccurrence() {
   const shiftedHTML = '<p>Previous paragraph.</p><p>State value (V(G_k)) appears here.</p>';
   const shiftedContext = prepareNoteHTML(shiftedHTML);
   const shiftedBlock = inline("block-1", "(V(G_k))", 1, "V(G_k)");
-  const relocated = validateModelResponse({ operations: [shiftedBlock] }, shiftedContext);
-  assert.equal(
-    relocated.operations[0].blockId,
-    "block-2",
-    "a wrong blockId is safely relocated when source has one exact editable match in the batch",
-  );
-  assert.equal(
-    applyModelOperations(shiftedHTML, { operations: [shiftedBlock] }).html,
-    '<p>Previous paragraph.</p><p>State value <span class="math">$V(G_k)$</span> appears here.</p>',
-  );
+  assertCode(() => validateModelResponse({
+    operations: [shiftedBlock],
+  }, shiftedContext), "source_mismatch");
 
   const ambiguousContext = prepareNoteHTML('<p>Wrong block.</p><p>(x)</p><p>(x)</p>');
   assertCode(() => validateModelResponse({
@@ -174,6 +174,7 @@ function testBlockReplacement() {
     { operations: [escapedSourceOperation] },
     {
       operationIndex: 1,
+      action: "replace",
       replacement: {
         type: "block",
         blockIds: ["block-1"],
@@ -197,6 +198,7 @@ function testBlockReplacement() {
     { operations: [escapedSourceOperation] },
     {
       operationIndex: 1,
+      action: "replace",
       replacement: [{
         type: "block",
         blockIds: ["block-1"],
@@ -211,6 +213,7 @@ function testBlockReplacement() {
     { operations: [escapedSourceOperation] },
     {
       operationIndex: 2,
+      action: "replace",
       replacement: { type: "block", blockIds: ["block-1"], latex: casesLatex },
     },
     escapedContext,
@@ -220,6 +223,7 @@ function testBlockReplacement() {
     { operations: [escapedSourceOperation] },
     {
       operationIndex: 1,
+      action: "replace",
       replacement: {
         type: "block",
         blockIds: ["block-1"],
@@ -234,11 +238,45 @@ function testBlockReplacement() {
     { operations: [escapedSourceOperation] },
     {
       operationIndex: 1,
+      action: "replace",
       replacement: { type: "block", blockIds: ["block-2"], latex: casesLatex },
     },
     escapedContext,
     { operationIndex: 0, allowedBlockIds: ["block-1"] },
   ), "unknown_block");
+
+  const phantomContext = prepareNoteHTML(
+    "<p>第 (i) 条轨迹前缀记为 (o_{i,\\le t})。</p><p>(s_{i,t}) is the score.</p>",
+  );
+  const validFirst = inline("block-1", "(i)", 1, "i");
+  const phantom = inline("block-1", "(s_{i,t})", 1, "s_{i,t}");
+  const validLast = inline("block-2", "(s_{i,t})", 1, "s_{i,t}");
+  const removed = applyOperationRepair(
+    { operations: [validFirst, phantom, validLast] },
+    { operationIndex: 2, action: "remove", replacement: {} },
+    phantomContext,
+    { operationIndex: 1, allowedBlockIds: ["block-1", "block-2"] },
+  );
+  assert.deepEqual(removed.operations, [validFirst, validLast]);
+
+  let replacementError;
+  try {
+    applyOperationRepair(
+      { operations: [validFirst, phantom, validLast] },
+      {
+        operationIndex: 2,
+        action: "replace",
+        replacement: phantom,
+      },
+      phantomContext,
+      { operationIndex: 1, allowedBlockIds: ["block-1", "block-2"] },
+    );
+  }
+  catch (error) {
+    replacementError = error;
+  }
+  assert.equal(replacementError?.operationIndex, 1);
+  assert.match(replacementError?.message || "", /^Operation 2 /);
 }
 
 function testPermissiveMathSources() {
@@ -272,6 +310,129 @@ function testPermissiveMathSources() {
       `model-selected source is accepted without local math semantics: ${source}`,
     );
   }
+}
+
+function testReadonlyMathContextAndReconstruction() {
+  const html = [
+    '<div class="zotero-note znv1">',
+    "<h1>[<br>R_p(m;s_t)</h1>",
+    '<p>\\alpha\\,\\mathrm{sim}(q_p(s_t),k_m)<br>+<br><span class="math">$1-\\alpha$</span><br>\\left[U(m)\\right]<br>]</p>',
+    "</div>",
+  ].join("");
+  const context = prepareNoteHTML(html);
+  const mixedBlock = context.blocks[1];
+  const reference = mixedBlock.readonlyMath[0];
+  assert.equal(reference.latex, "1-\\alpha");
+  assert.match(mixedBlock.text, /READONLY_MATH:math-1/);
+
+  const source = context.blocks.map((block) => block.text).join("\n");
+  const normalized = {
+    type: "block",
+    blockIds: context.blocks.map((block) => block.id),
+    source,
+    latex: "R_p(m;s_t)=\\alpha\\,\\mathrm{sim}(q_p(s_t),k_m)+(1 - \\alpha)\\left[U(m)\\right]",
+  };
+  const unresolved = {
+    ...normalized,
+    latex: `R_p(m;s_t)=${reference.marker}`,
+  };
+  assertCode(
+    () => validateModelResponse({ operations: [unresolved] }, context),
+    "unresolved_math_reference",
+  );
+
+  const applied = applyModelOperations(html, { operations: [normalized] });
+  assert.deepEqual(applied.stats, { inline: 0, block: 1 });
+  assert.equal(applied.html.includes("READONLY_MATH"), false);
+  assert.equal(applied.html.includes('<span class="math">'), false);
+  assert.match(applied.html, /<pre class="math">\$\$R_p/);
+  assert.match(applied.html, /1 - \\alpha/);
+
+  const klHTML = '<h1>[<br>D^{\\mathrm{topK}}_{e,j}</h1><p>D_{\\mathrm{KL}}<span class="math">$q_{e,j}|p_{e,j}$</span><br>]</p>';
+  const klContext = prepareNoteHTML(klHTML);
+  const klResult = applyModelOperations(klHTML, {
+    operations: [{
+      type: "block",
+      blockIds: klContext.blocks.map((block) => block.id),
+      source: klContext.blocks.map((block) => block.text).join("\n"),
+      latex: "D^{\\mathrm{topK}}_{e,j}=D_{\\mathrm{KL}}[q_{e,j}\\|p_{e,j}]",
+    }],
+  });
+  assert.match(klResult.html, /q_\{e,j\}\\\|p_\{e,j\}/);
+
+  const filtered = filterUneditableInlineOperations({
+    operations: [
+      inline(mixedBlock.id, reference.marker, 1, "1-\\alpha"),
+      inline(context.blocks[0].id, "(m)", 1, "m"),
+    ],
+  }, context);
+  assert.equal(filtered.removed.length, 1);
+  assert.equal(filtered.removed[0].reason, "readonly_math");
+  assert.deepEqual(filtered.payload.operations, [
+    inline(context.blocks[0].id, "(m)", 1, "m"),
+  ]);
+
+  const hardHTML = '<p>Keep <span data-citation="secret">Citation</span> text</p>';
+  const hardContext = prepareNoteHTML(hardHTML);
+  assertCode(() => validateModelResponse({
+    operations: [{
+      type: "block",
+      blockIds: ["block-1"],
+      source: hardContext.blocks[0].text,
+      latex: "x",
+    }],
+  }, hardContext), "protected_content");
+}
+
+function testRedundantOperationCoalescing() {
+  const html = [
+    '<div class="zotero-note znv1">',
+    "<h1>[<br>R_p(m;s_t)</h1>",
+    "<p>x<br>]</p>",
+    "<p>Skill (m).</p>",
+    "</div>",
+  ].join("");
+  const context = prepareNoteHTML(html);
+  const inlineOperation = inline("block-1", "R_p(m;s_t)", 1, "R_p(m;s_t)");
+  const blockOperation = {
+    type: "block",
+    blockIds: ["block-1", "block-2"],
+    source: context.blocks.slice(0, 2).map((block) => block.text).join("\n"),
+    latex: "R_p(m;s_t)=x",
+  };
+  const unrelatedOperation = inline("block-3", "(m)", 1, "m");
+  const filtered = filterRedundantOperations({
+    operations: [inlineOperation, blockOperation, unrelatedOperation],
+  }, context);
+
+  assert.equal(filtered.removed.length, 1);
+  assert.equal(filtered.removed[0].reason, "covered_by_block_operation");
+  assert.equal(filtered.removed[0].operationIndex, 1);
+  assert.equal(filtered.removed[0].coveringOperationIndex, 2);
+  assert.deepEqual(filtered.payload.operations, [blockOperation, unrelatedOperation]);
+  assert.deepEqual(
+    validateModelResponse(filtered.payload, context).stats,
+    { inline: 1, block: 1 },
+  );
+
+  const trueConflict = filterRedundantOperations({
+    operations: [
+      inlineOperation,
+      { ...blockOperation, latex: "Q=x" },
+    ],
+  }, context);
+  assert.equal(trueConflict.removed.length, 0);
+  assertCode(
+    () => validateModelResponse(trueConflict.payload, context),
+    "overlapping_operations",
+  );
+
+  const duplicate = filterRedundantOperations({
+    operations: [unrelatedOperation, { ...unrelatedOperation }],
+  }, context);
+  assert.equal(duplicate.removed.length, 1);
+  assert.equal(duplicate.removed[0].reason, "exact_duplicate");
+  assert.deepEqual(duplicate.payload.operations, [unrelatedOperation]);
 }
 
 function testLatexBraceValidation() {
@@ -342,7 +503,7 @@ function testFormattingPreservation() {
 }
 
 function testValidationFailures() {
-  const html = '<div class="zotero-note znv1"><p>Formula (d_i) and (v_i).</p><p><span class="math">$x$</span> protected</p><pre>code y=1</pre></div>';
+  const html = '<div class="zotero-note znv1"><p>Formula (d_i) and (v_i).</p><p><span data-citation="secret">Citation</span> protected</p><pre>code y=1</pre></div>';
   const context = prepareNoteHTML(html);
   assertCode(() => validateModelResponse("not json", context), "invalid_json");
   assertCode(() => validateModelResponse({}, context), "invalid_schema");
@@ -376,7 +537,7 @@ function testValidationFailures() {
     operations: [{
       type: "block",
       blockIds: ["block-1", "block-2"],
-      source: "Formula (d_i) and (v_i).\nprotected",
+      source: `Formula (d_i) and (v_i).\n${PROTECTED_CONTENT} protected`,
       latex: "x",
     }],
   }, context), "protected_content");

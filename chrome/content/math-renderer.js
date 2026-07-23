@@ -216,6 +216,7 @@
       const trace = await this.startTrace("process-math-with-ai");
       let target;
       let provider;
+      let progressIndicator;
       let originalHTML = "";
       let itemID = null;
       let outcome = {
@@ -260,6 +261,7 @@
             else {
               processingItems.add(itemID);
               updateMenuStateForAllWindows();
+              progressIndicator = createAIProgressIndicator(win, trace);
               originalHTML = getCurrentHTML(target);
               await safeTrace(trace, "note_input", {
                 target: describeTarget(target),
@@ -283,6 +285,12 @@
                 provider,
                 trace,
                 core: global.ZoteroMathPatchAICore,
+                onProgress: (event) => {
+                  progressIndicator?.update?.(event);
+                  if (event?.phase === "preview_ready") {
+                    progressIndicator?.close?.();
+                  }
+                },
                 confirmPreview: ({ operations, stats }) => showPreviewDialog(win, operations, stats),
                 getCurrentHTML: () => getCurrentHTML(target),
                 save: async (html) => {
@@ -310,9 +318,10 @@
               await safeTrace(trace, "workflow_result", { result });
 
               if (result.status === "saved") {
+                const ignoredMessage = getIgnoredOperationMessage(result);
                 outcome = {
                   status: "saved",
-                  message: `Saved ${result.stats.inline} inline and ${result.stats.block} block formula(s) using ${settings.model}.`,
+                  message: `Saved ${result.stats.inline} inline and ${result.stats.block} block formula(s) using ${settings.model}.${ignoredMessage}`,
                   result,
                 };
               }
@@ -331,9 +340,10 @@
                 };
               }
               else {
+                const ignoredMessage = getIgnoredOperationMessage(result);
                 outcome = {
                   status: "no_formulas",
-                  message: "No damaged formulas were found. The note was not modified.",
+                  message: `No damaged formulas were found. The note was not modified.${ignoredMessage}`,
                   result,
                 };
               }
@@ -352,6 +362,7 @@
         };
       }
       finally {
+        progressIndicator?.close?.();
         if (provider) {
           activeProviders.delete(provider);
         }
@@ -536,6 +547,31 @@
     };
   }
 
+  function createAIProgressIndicator(win, trace) {
+    const reportError = (error) => {
+      Zotero.debug("Zotero Math Patch progress indicator failed: " + String(error?.name || "unknown_error"));
+      safeTrace(trace, "progress_indicator_error", { error });
+    };
+    try {
+      const factory = global.ZoteroMathPatchAIProgress?.createProgressIndicator;
+      if (typeof factory !== "function") {
+        throw new Error("The AI progress indicator module is unavailable.");
+      }
+      return factory({
+        Zotero,
+        window: win || Zotero.getMainWindow(),
+        onError: reportError,
+      });
+    }
+    catch (error) {
+      reportError(error);
+      return {
+        update() {},
+        close() {},
+      };
+    }
+  }
+
   function reportLoggerError(error) {
     try {
       Zotero.debug(
@@ -585,6 +621,21 @@
     const base = String(message || "");
     const detail = String(warning || "").trim();
     return detail ? `${base}\n\nLogging warning: ${detail}` : base;
+  }
+
+  function getIgnoredOperationMessage(result) {
+    const messages = [];
+    if (result?.ignoredProtectedOperations) {
+      messages.push(
+        `${result.ignoredProtectedOperations} operation(s) targeting existing formulas or protected content`,
+      );
+    }
+    if (result?.ignoredRedundantOperations) {
+      messages.push(
+        `${result.ignoredRedundantOperations} redundant operation(s) already covered by another result`,
+      );
+    }
+    return messages.length ? ` Ignored ${messages.join(" and ")}.` : "";
   }
 
   const windowListener = {

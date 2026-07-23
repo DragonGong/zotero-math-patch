@@ -2,6 +2,7 @@
   "use strict";
 
   const PROTECTED_CONTENT = "\uFFFC";
+  const READONLY_MATH_PREFIX = "[[READONLY_MATH:";
   const MAX_OPERATIONS = 200;
   const MAX_SOURCE_LENGTH = 20000;
   const MAX_LATEX_LENGTH = 10000;
@@ -56,10 +57,32 @@
       .filter((node) => !isInsideProtectedContent(node));
     const candidateSet = new Set(candidateNodes);
     const records = [];
+    const readonlyMathByNode = new WeakMap();
+    let readonlyMathIndex = 0;
+
+    const getReadonlyMath = (node) => {
+      let reference = readonlyMathByNode.get(node);
+      if (reference) {
+        return reference;
+      }
+      const id = "math-" + (++readonlyMathIndex);
+      reference = {
+        id,
+        marker: `${READONLY_MATH_PREFIX}${id}]]`,
+        latex: extractExistingMathLatex(node),
+        kind: node.tagName === "PRE" ? "block" : "inline",
+      };
+      readonlyMathByNode.set(node, reference);
+      return reference;
+    };
 
     for (const node of candidateNodes) {
-      const record = buildBlockRecord(node, candidateSet);
-      const editableText = record.text.split(PROTECTED_CONTENT).join("").trim();
+      const record = buildBlockRecord(node, candidateSet, getReadonlyMath);
+      const editableText = record.segments
+        .filter((segment) => segment.type === "text")
+        .map((segment) => segment.node?.nodeValue || "")
+        .join("")
+        .trim();
       if (!editableText) {
         continue;
       }
@@ -74,15 +97,17 @@
       blocks: records.map(copyPublicBlock),
       records,
       recordByID,
+      readonlyMath: records.flatMap((record) => record.readonlyMath),
     };
   }
 
-  function buildBlockRecord(node, candidateSet) {
+  function buildBlockRecord(node, candidateSet, getReadonlyMath) {
     let text = "";
     const segments = [];
+    const readonlyMath = [];
     let hasNestedBlock = false;
 
-    function appendSegment(type, value, sourceNode = null) {
+    function appendSegment(type, value, sourceNode = null, details = null) {
       if (!value) {
         return;
       }
@@ -93,6 +118,7 @@
         start,
         end: text.length,
         node: sourceNode,
+        ...(details || {}),
       });
     }
 
@@ -107,6 +133,12 @@
       if (!isRoot && candidateSet.has(current)) {
         hasNestedBlock = true;
         appendProtectedBoundary();
+        return;
+      }
+      if (!isRoot && current.classList?.contains("math")) {
+        const reference = getReadonlyMath(current);
+        readonlyMath.push(reference);
+        appendSegment("readonlyMath", reference.marker, current, { reference });
         return;
       }
       if (!isRoot && isProtectedElement(current)) {
@@ -136,8 +168,20 @@
       text,
       node,
       segments,
+      readonlyMath,
       allowBlockReplacement: !hasNestedBlock && !node.classList?.contains("zotero-note"),
     };
+  }
+
+  function extractExistingMathLatex(node) {
+    const content = String(node?.textContent || "").trim();
+    if (content.length >= 4 && content.startsWith("$$") && content.endsWith("$$")) {
+      return content.slice(2, -2).trim();
+    }
+    if (content.length >= 2 && content.startsWith("$") && content.endsWith("$")) {
+      return content.slice(1, -1).trim();
+    }
+    return content;
   }
 
   function validateModelResponse(payload, context, options = {}) {
@@ -206,6 +250,153 @@
     }
   }
 
+  function filterUneditableInlineOperations(payload, context) {
+    if (!payload || typeof payload !== "object" || !Array.isArray(payload.operations)) {
+      return { payload, removed: [] };
+    }
+    const removed = [];
+    const operations = payload.operations.filter((operation, index) => {
+      if (operation?.type !== "inline" || typeof operation.source !== "string") {
+        return true;
+      }
+      const reason = protectedInlineSourceReason(operation.source, context);
+      if (!reason) {
+        return true;
+      }
+      removed.push({
+        operationIndex: index + 1,
+        reason,
+        operation,
+      });
+      return false;
+    });
+    return {
+      payload: { ...payload, operations },
+      removed,
+    };
+  }
+
+  function filterRedundantOperations(payload, context, options = {}) {
+    if (!payload || typeof payload !== "object" || !Array.isArray(payload.operations)) {
+      return { payload, removed: [] };
+    }
+
+    const operations = payload.operations;
+    const removedIndexes = new Set();
+    const removed = [];
+    const seenOperations = new Map();
+    for (let index = 0; index < operations.length; index++) {
+      let signature;
+      try {
+        signature = JSON.stringify(operations[index]);
+      }
+      catch (_error) {
+        continue;
+      }
+      if (seenOperations.has(signature)) {
+        removedIndexes.add(index);
+        removed.push({
+          operationIndex: index + 1,
+          coveringOperationIndex: seenOperations.get(signature) + 1,
+          reason: "exact_duplicate",
+          operation: operations[index],
+        });
+      }
+      else {
+        seenOperations.set(signature, index);
+      }
+    }
+
+    const allowedBlockIDs = options.allowedBlockIds
+      ? new Set(options.allowedBlockIds)
+      : null;
+    const inlineCandidates = [];
+    const blockCandidates = [];
+    operations.forEach((operation, index) => {
+      if (removedIndexes.has(index)) {
+        return;
+      }
+      try {
+        if (operation?.type === "inline") {
+          inlineCandidates.push({
+            index,
+            validation: validateInlineOperation(
+              operation,
+              context,
+              allowedBlockIDs,
+              index,
+            ),
+          });
+        }
+        else if (operation?.type === "block") {
+          blockCandidates.push({
+            index,
+            validation: validateBlockOperation(
+              operation,
+              context,
+              allowedBlockIDs,
+              index,
+            ),
+          });
+        }
+      }
+      catch (_error) {
+        // Invalid operations remain in the payload for normal validation and repair.
+      }
+    });
+
+    for (const inlineCandidate of inlineCandidates) {
+      if (removedIndexes.has(inlineCandidate.index)) {
+        continue;
+      }
+      const inlineOperation = inlineCandidate.validation.operation;
+      const inlineCoverage = inlineCandidate.validation.metadata.coverage;
+      for (const blockCandidate of blockCandidates) {
+        const blockOperation = blockCandidate.validation.operation;
+        const blockCoverage = blockCandidate.validation.metadata.coverage.find(
+          (coverage) => coverage.blockId === inlineCoverage.blockId,
+        );
+        const isCovered = blockCoverage
+          && blockCoverage.start <= inlineCoverage.start
+          && inlineCoverage.end <= blockCoverage.end;
+        if (!isCovered || !blockOperation.latex.includes(inlineOperation.latex)) {
+          continue;
+        }
+        removedIndexes.add(inlineCandidate.index);
+        removed.push({
+          operationIndex: inlineCandidate.index + 1,
+          coveringOperationIndex: blockCandidate.index + 1,
+          reason: "covered_by_block_operation",
+          operation: operations[inlineCandidate.index],
+        });
+        break;
+      }
+    }
+
+    return {
+      payload: {
+        ...payload,
+        operations: operations.filter((_operation, index) => !removedIndexes.has(index)),
+      },
+      removed,
+    };
+  }
+
+  function protectedInlineSourceReason(source, context) {
+    if (source.includes(PROTECTED_CONTENT)) {
+      return "hard_protected_content";
+    }
+    if (source.includes(READONLY_MATH_PREFIX)) {
+      return "readonly_math";
+    }
+    for (const reference of context?.readonlyMath || []) {
+      if (source.includes(reference.marker)) {
+        return "readonly_math";
+      }
+    }
+    return "";
+  }
+
   function applyOperationRepair(payload, repairPayload, context, options = {}) {
     const parsed = parseModelPayload(payload);
     assertPlainObject(parsed, "The candidate model response must be a JSON object.");
@@ -217,7 +408,7 @@
     assertPlainObject(repair, "The model repair response must be a JSON object.");
     assertExactKeys(
       repair,
-      ["operationIndex", "replacement"],
+      ["operationIndex", "action", "replacement"],
       "The model repair response contains unsupported fields.",
     );
     const expectedIndex = options.operationIndex;
@@ -235,18 +426,37 @@
     }
     assertPlainObject(repair.replacement, "The model repair replacement must be an object.");
 
+    if (repair.action === "remove") {
+      assertExactKeys(
+        repair.replacement,
+        [],
+        "A remove repair must contain an empty replacement object.",
+      );
+      const operations = parsed.operations.slice();
+      operations.splice(expectedIndex, 1);
+      return { operations };
+    }
+    if (repair.action !== "replace") {
+      throw validationError(
+        "invalid_repair",
+        "The model repair action must be replace or remove.",
+        expectedIndex,
+      );
+    }
+
     const allowedBlockIDs = options.allowedBlockIds
       ? new Set(options.allowedBlockIds)
       : null;
     let replacement;
     try {
       if (repair.replacement.type === "inline") {
-        const validation = validateModelResponse(
-          { operations: [repair.replacement] },
+        const validation = validateInlineOperation(
+          repair.replacement,
           context,
-          { allowedBlockIds: options.allowedBlockIds },
+          allowedBlockIDs,
+          expectedIndex,
         );
-        replacement = validation.operations[0];
+        replacement = validation.operation;
       }
       else if (repair.replacement.type === "block") {
         assertExactKeys(
@@ -307,18 +517,13 @@
       throw validationError("protected_content", `Operation ${operationIndex + 1} targets protected note content.`);
     }
 
-    let record = getRecord(context, operation.blockId, allowedBlockIDs, operationIndex);
-    let range = findOccurrenceRange(record.text, operation.source, operation.occurrence);
+    const record = getRecord(context, operation.blockId, allowedBlockIDs, operationIndex);
+    const range = findOccurrenceRange(record.text, operation.source, operation.occurrence);
     if (!range) {
-      const relocated = findUniqueEditableInlineTarget(context, operation.source, allowedBlockIDs);
-      if (!relocated) {
-        throw validationError(
-          "source_mismatch",
-          `Operation ${operationIndex + 1} source, blockId, and occurrence do not identify one unique editable location in the request batch.`,
-        );
-      }
-      record = relocated.record;
-      range = relocated.range;
+      throw validationError(
+        "source_mismatch",
+        `Operation ${operationIndex + 1} source is not occurrence ${operation.occurrence} in ${operation.blockId}. The model must choose the exact source location or remove the operation.`,
+      );
     }
     if (!rangeIsEditable(record, range.start, range.end)) {
       throw validationError("protected_content", `Operation ${operationIndex + 1} crosses protected or non-text content.`);
@@ -358,10 +563,6 @@
     if (!operation.source || operation.source.length > MAX_SOURCE_LENGTH) {
       throw validationError("invalid_source", `Operation ${operationIndex + 1} has an empty or oversized source.`);
     }
-    if (operation.source.includes(PROTECTED_CONTENT)) {
-      throw validationError("protected_content", `Operation ${operationIndex + 1} targets protected note content.`);
-    }
-
     const records = getSafeBlockRecords(
       operation.blockIds,
       context,
@@ -375,6 +576,7 @@
         `Operation ${operationIndex + 1} source does not exactly match its blocks.`,
       );
     }
+    validateReadonlyMathReconstruction(records, latex, operationIndex);
 
     return {
       operation: {
@@ -597,13 +799,7 @@
 
   function findOccurrenceRange(text, source, occurrence) {
     const ranges = findOccurrenceRanges(text, source);
-    if (occurrence <= ranges.length) {
-      return ranges[occurrence - 1];
-    }
-    if (ranges.length === 1) {
-      return ranges[0];
-    }
-    return null;
+    return occurrence <= ranges.length ? ranges[occurrence - 1] : null;
   }
 
   function findOccurrenceRanges(text, source) {
@@ -622,21 +818,6 @@
       offset = found + source.length;
     }
     return ranges;
-  }
-
-  function findUniqueEditableInlineTarget(context, source, allowedBlockIDs) {
-    const candidates = [];
-    for (const record of context?.records || []) {
-      if (allowedBlockIDs && !allowedBlockIDs.has(record.id)) {
-        continue;
-      }
-      for (const range of findOccurrenceRanges(record.text, source)) {
-        if (rangeIsEditable(record, range.start, range.end)) {
-          candidates.push({ record, range });
-        }
-      }
-    }
-    return candidates.length === 1 ? candidates[0] : null;
   }
 
   function areContiguousBlockRecords(records) {
@@ -668,7 +849,10 @@
       (id) => getRecord(context, id, allowedBlockIDs, operationIndex),
     );
     for (const record of records) {
-      if (!record.allowBlockReplacement || record.text.includes(PROTECTED_CONTENT)) {
+      const hasHardProtectedContent = record.segments.some(
+        (segment) => segment.type === "protected",
+      );
+      if (!record.allowBlockReplacement || hasHardProtectedContent) {
         throw validationError("protected_content", `Operation ${operationIndex + 1} cannot replace this block safely.`);
       }
     }
@@ -679,6 +863,28 @@
       );
     }
     return records;
+  }
+
+  function validateReadonlyMathReconstruction(records, latex, operationIndex) {
+    const references = records.flatMap((record) => record.readonlyMath || []);
+    if (!references.length) {
+      return;
+    }
+    const hasEditableText = records.some((record) => record.segments.some(
+      (segment) => segment.type === "text" && (segment.node?.nodeValue || "").trim(),
+    ));
+    if (!hasEditableText) {
+      throw validationError(
+        "protected_content",
+        `Operation ${operationIndex + 1} cannot replace a block containing only existing formulas.`,
+      );
+    }
+    if (latex.includes(READONLY_MATH_PREFIX)) {
+      throw validationError(
+        "unresolved_math_reference",
+        `Operation ${operationIndex + 1} returned an internal existing-math marker instead of complete LaTeX.`,
+      );
+    }
   }
 
   function rangeIsEditable(record, start, end) {
@@ -865,11 +1071,20 @@
   }
 
   function copyPublicBlock(record) {
-    return {
+    const block = {
       id: record.id,
       tag: record.tag,
       text: record.text,
     };
+    if (Array.isArray(record.readonlyMath) && record.readonlyMath.length) {
+      block.readonlyMath = record.readonlyMath.map((reference) => ({
+        id: reference.id,
+        marker: reference.marker,
+        latex: reference.latex,
+        kind: reference.kind,
+      }));
+    }
+    return block;
   }
 
   function assertPlainObject(value, message) {
@@ -903,6 +1118,8 @@
     extractSafeTextBlocks,
     prepareNoteHTML,
     parseModelPayload,
+    filterUneditableInlineOperations,
+    filterRedundantOperations,
     validateModelResponse,
     applyOperationRepair,
     applyModelOperations,

@@ -2,6 +2,7 @@
   "use strict";
 
   const MAX_OPERATION_REPAIR_ATTEMPTS = 2;
+  const MAX_BATCH_REPAIR_ATTEMPTS = 8;
 
   async function processNoteWithAI(options) {
     const core = options?.core || global.ZoteroMathPatchAICore;
@@ -23,6 +24,7 @@
         systemPrompt: settings.systemPrompt,
       },
     });
+    await safeProgress(options.onProgress, { phase: "preparing" });
 
     try {
       const context = core.prepareNoteHTML(originalHTML);
@@ -32,6 +34,7 @@
       });
       if (!context.blocks.length) {
         await safeTrace(trace, "workflow_no_text", {});
+        await safeProgress(options.onProgress, { phase: "complete", status: "no_text" });
         return emptyResult("no_text");
       }
 
@@ -48,7 +51,13 @@
           allowedBlockIds: batch.allowedBlockIds,
         })),
       });
+      await safeProgress(options.onProgress, {
+        phase: "batches_ready",
+        total: batches.length,
+      });
       const batchResults = [];
+      let ignoredProtectedOperations = 0;
+      let ignoredRedundantOperations = 0;
 
       for (let index = 0; index < batches.length; index++) {
         const batch = batches[index];
@@ -58,6 +67,10 @@
           batchId: batch.id,
         };
         options.onBatch?.(progress);
+        await safeProgress(options.onProgress, {
+          phase: "requesting_batch",
+          ...progress,
+        });
         await safeTrace(trace, "batch_started", {
           ...progress,
           blocks: batch.blocks,
@@ -67,6 +80,7 @@
         try {
           payload = await provider.processBlocks({
             blocks: batch.blocks,
+            editableBlockIds: batch.allowedBlockIds,
             prompt: settings.systemPrompt,
             signal: options.signal,
             trace,
@@ -80,6 +94,34 @@
           ...progress,
           payload,
         });
+        if (typeof core.filterUneditableInlineOperations === "function") {
+          const filtered = core.filterUneditableInlineOperations(payload, context);
+          if (filtered.removed.length) {
+            ignoredProtectedOperations += filtered.removed.length;
+            await safeTrace(trace, "protected_operations_ignored", {
+              ...progress,
+              removed: filtered.removed,
+            });
+          }
+          payload = filtered.payload;
+        }
+        if (typeof core.filterRedundantOperations === "function") {
+          const filtered = core.filterRedundantOperations(payload, context, {
+            allowedBlockIds: batch.allowedBlockIds,
+          });
+          if (filtered.removed.length) {
+            ignoredRedundantOperations += filtered.removed.length;
+            await safeTrace(trace, "redundant_operations_ignored", {
+              ...progress,
+              removed: filtered.removed,
+            });
+          }
+          payload = filtered.payload;
+        }
+        await safeProgress(options.onProgress, {
+          phase: "validating_batch",
+          ...progress,
+        });
         payload = await validateAndRepairBatch({
           payload,
           batch,
@@ -90,13 +132,21 @@
           prompt: settings.systemPrompt,
           signal: options.signal,
           trace,
-          maxRepairAttempts: Number.isInteger(options.maxRepairAttempts)
+          onProgress: options.onProgress,
+          maxRepairAttemptsPerOperation: Number.isInteger(options.maxRepairAttempts)
             ? Math.max(0, options.maxRepairAttempts)
             : MAX_OPERATION_REPAIR_ATTEMPTS,
+          maxTotalRepairAttempts: Number.isInteger(options.maxTotalRepairAttempts)
+            ? Math.max(0, options.maxTotalRepairAttempts)
+            : MAX_BATCH_REPAIR_ATTEMPTS,
         });
         await safeTrace(trace, "batch_completed", {
           ...progress,
           payload,
+        });
+        await safeProgress(options.onProgress, {
+          phase: "batch_completed",
+          ...progress,
         });
         batchResults.push({
           payload,
@@ -104,6 +154,10 @@
         });
       }
 
+      await safeProgress(options.onProgress, {
+        phase: "validating_result",
+        total: batches.length,
+      });
       let merged;
       try {
         merged = core.mergeBatchResults(batchResults, context);
@@ -120,8 +174,18 @@
         operationCount: merged.operations.length,
       });
       if (!merged.operations.length) {
-        await safeTrace(trace, "workflow_no_formulas", { batchCount: batches.length });
-        return emptyResult("no_formulas", batches.length);
+        await safeTrace(trace, "workflow_no_formulas", {
+          batchCount: batches.length,
+          ignoredProtectedOperations,
+          ignoredRedundantOperations,
+        });
+        await safeProgress(options.onProgress, { phase: "complete", status: "no_formulas" });
+        return emptyResult(
+          "no_formulas",
+          batches.length,
+          ignoredProtectedOperations,
+          ignoredRedundantOperations,
+        );
       }
 
       let applied;
@@ -144,11 +208,25 @@
         stats: applied.stats,
       });
       if (!applied.changed) {
-        await safeTrace(trace, "workflow_no_formulas", { batchCount: batches.length });
-        return emptyResult("no_formulas", batches.length);
+        await safeTrace(trace, "workflow_no_formulas", {
+          batchCount: batches.length,
+          ignoredProtectedOperations,
+          ignoredRedundantOperations,
+        });
+        await safeProgress(options.onProgress, { phase: "complete", status: "no_formulas" });
+        return emptyResult(
+          "no_formulas",
+          batches.length,
+          ignoredProtectedOperations,
+          ignoredRedundantOperations,
+        );
       }
 
       if (settings.showPreview && typeof options.confirmPreview === "function") {
+        await safeProgress(options.onProgress, {
+          phase: "preview_ready",
+          stats: applied.stats,
+        });
         await safeTrace(trace, "preview_opened", {
           operations: applied.operations,
           stats: applied.stats,
@@ -159,17 +237,21 @@
         });
         await safeTrace(trace, "preview_decision", { accepted: accepted === true });
         if (!accepted) {
+          await safeProgress(options.onProgress, { phase: "complete", status: "cancelled" });
           return {
             status: "cancelled",
             saved: false,
             stats: applied.stats,
             operations: applied.operations,
             batchCount: batches.length,
+            ignoredProtectedOperations,
+            ignoredRedundantOperations,
           };
         }
       }
 
       if (typeof options.getCurrentHTML === "function") {
+        await safeProgress(options.onProgress, { phase: "checking_note" });
         const currentHTML = String((await options.getCurrentHTML()) || "");
         await safeTrace(trace, "concurrent_edit_check", {
           changed: currentHTML !== originalHTML,
@@ -183,6 +265,7 @@
         }
       }
 
+      await safeProgress(options.onProgress, { phase: "saving" });
       await safeTrace(trace, "save_started", { finalHTML: applied.html });
       try {
         await options.save(applied.html);
@@ -192,6 +275,7 @@
         throw error;
       }
       await safeTrace(trace, "save_completed", { finalHTML: applied.html });
+      await safeProgress(options.onProgress, { phase: "complete", status: "saved" });
       return {
         status: "saved",
         saved: true,
@@ -199,9 +283,16 @@
         stats: applied.stats,
         operations: applied.operations,
         batchCount: batches.length,
+        ignoredProtectedOperations,
+        ignoredRedundantOperations,
       };
     }
     catch (error) {
+      await safeProgress(options.onProgress, {
+        phase: "complete",
+        status: "error",
+        errorCode: String(error?.code || error?.name || "unknown_error"),
+      });
       await safeTrace(trace, "workflow_error", {
         error,
         originalHTML,
@@ -212,18 +303,23 @@
 
   async function validateAndRepairBatch(options) {
     let payload = options.payload;
-    let repairAttempts = 0;
-    let previousRepairFeedback = null;
+    let totalRepairAttempts = 0;
+    const attemptsByOperation = new Map();
+    const feedbackByOperation = new Map();
+    const operationKeys = Array.from(
+      { length: Array.isArray(payload?.operations) ? payload.operations.length : 0 },
+      () => Symbol("operation"),
+    );
 
     while (true) {
       try {
         options.core.validateModelResponse(payload, options.context, {
           allowedBlockIds: options.batch.allowedBlockIds,
         });
-        if (repairAttempts) {
+        if (totalRepairAttempts) {
           await safeTrace(options.trace, "operation_repair_validated", {
             ...options.progress,
-            repairAttempts,
+            repairAttempts: totalRepairAttempts,
             payload,
           });
         }
@@ -232,7 +328,7 @@
       catch (error) {
         await safeTrace(options.trace, "batch_validation_failed", {
           ...options.progress,
-          repairAttempts,
+          repairAttempts: totalRepairAttempts,
           payload,
           error,
         });
@@ -240,9 +336,17 @@
         const operationIndex = Number.isInteger(error?.operationIndex)
           ? error.operationIndex
           : null;
+        const invalidOperation = operationIndex === null
+          ? null
+          : payload?.operations?.[operationIndex];
+        const operationKey = operationIndex === null
+          ? null
+          : operationKeys[operationIndex] || null;
+        const operationAttempts = attemptsByOperation.get(operationKey) || 0;
         if (
           operationIndex === null
-          || repairAttempts >= options.maxRepairAttempts
+          || operationAttempts >= options.maxRepairAttemptsPerOperation
+          || totalRepairAttempts >= options.maxTotalRepairAttempts
           || typeof options.provider.repairOperation !== "function"
         ) {
           await safeTrace(options.trace, "model_validation_failed", {
@@ -255,10 +359,22 @@
           throw error;
         }
 
-        repairAttempts++;
+        const operationAttempt = operationAttempts + 1;
+        totalRepairAttempts++;
+        attemptsByOperation.set(operationKey, operationAttempt);
+        await safeProgress(options.onProgress, {
+          phase: "repairing_operation",
+          ...options.progress,
+          operationIndex: operationIndex + 1,
+          attempt: operationAttempt,
+          maxAttempts: options.maxRepairAttemptsPerOperation,
+          totalAttempt: totalRepairAttempts,
+          maxTotalAttempts: options.maxTotalRepairAttempts,
+        });
         await safeTrace(options.trace, "operation_repair_started", {
           ...options.progress,
-          repairAttempt: repairAttempts,
+          repairAttempt: operationAttempt,
+          totalRepairAttempt: totalRepairAttempts,
           operationIndex: operationIndex + 1,
           error,
         });
@@ -267,11 +383,12 @@
         try {
           repair = await options.provider.repairOperation({
             blocks: options.batch.blocks,
+            editableBlockIds: options.batch.allowedBlockIds,
             prompt: options.prompt,
             candidate: payload,
             operationIndex: operationIndex + 1,
             validationError: error,
-            previousRepairFeedback,
+            previousRepairFeedback: feedbackByOperation.get(operationKey) || null,
             signal: options.signal,
             trace: options.trace,
           });
@@ -279,7 +396,8 @@
         catch (repairRequestError) {
           await safeTrace(options.trace, "operation_repair_request_failed", {
             ...options.progress,
-            repairAttempt: repairAttempts,
+            repairAttempt: operationAttempt,
+            totalRepairAttempt: totalRepairAttempts,
             operationIndex: operationIndex + 1,
             error: repairRequestError,
           });
@@ -288,27 +406,36 @@
 
         await safeTrace(options.trace, "operation_repair_received", {
           ...options.progress,
-          repairAttempt: repairAttempts,
+          repairAttempt: operationAttempt,
+          totalRepairAttempt: totalRepairAttempts,
           operationIndex: operationIndex + 1,
           repair,
         });
         try {
-          payload = options.core.applyOperationRepair(payload, repair, options.context, {
+          const repairedPayload = options.core.applyOperationRepair(payload, repair, options.context, {
             allowedBlockIds: options.batch.allowedBlockIds,
             operationIndex,
           });
-          previousRepairFeedback = null;
+          if (repair?.action === "remove") {
+            operationKeys.splice(operationIndex, 1);
+          }
+          payload = repairedPayload;
+          feedbackByOperation.delete(operationKey);
         }
         catch (repairError) {
-          previousRepairFeedback = { repair, error: repairError };
+          feedbackByOperation.set(operationKey, { repair, error: repairError });
           await safeTrace(options.trace, "operation_repair_rejected", {
             ...options.progress,
-            repairAttempt: repairAttempts,
+            repairAttempt: operationAttempt,
+            totalRepairAttempt: totalRepairAttempts,
             operationIndex: operationIndex + 1,
             repair,
             error: repairError,
           });
-          if (repairAttempts >= options.maxRepairAttempts) {
+          if (
+            operationAttempt >= options.maxRepairAttemptsPerOperation
+            || totalRepairAttempts >= options.maxTotalRepairAttempts
+          ) {
             await safeTrace(options.trace, "model_validation_failed", {
               batchResults: [{
                 payload,
@@ -324,19 +451,34 @@
     }
   }
 
-  function emptyResult(status, batchCount = 0) {
+  function emptyResult(
+    status,
+    batchCount = 0,
+    ignoredProtectedOperations = 0,
+    ignoredRedundantOperations = 0,
+  ) {
     return {
       status,
       saved: false,
       stats: { inline: 0, block: 0 },
       operations: [],
       batchCount,
+      ignoredProtectedOperations,
+      ignoredRedundantOperations,
     };
   }
 
   async function safeTrace(trace, eventName, data) {
     try {
       await trace?.event?.(eventName, data);
+    }
+    catch (_error) {}
+  }
+
+  function safeProgress(callback, event) {
+    try {
+      const result = callback?.(event);
+      result?.catch?.(() => {});
     }
     catch (_error) {}
   }
